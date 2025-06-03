@@ -1,0 +1,113 @@
+{
+  "name": "simple-electron-app",
+  "version": "1.0.0",
+  "description": "Morrisons EDI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux"
+  },
+  "keywords": [
+    "electron",
+    "app"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "axios": "^1.9.0",
+    "electron-store": "^10.0.1",
+    "ftp": "^0.3.10",
+    "ssh2": "^1.16.0",
+    "ssh2-sftp-client": "^10.0.3"
+  },
+  "build": {
+    "appId": "com.yourname.simple-electron-app",
+    "productName": "Morrisons EDI",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!node_modules",
+      "!src",
+      "!dist"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Morrisons EDI",
+      "runAfterFinish": true,
+      "artifactName": "Morrisons EDI Setup.exe"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Morrisons EDI",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 410,
+          "y": 230,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 230,
+          "type": "file"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility"
+    }
+  }
+}

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FTP Sync Tool</title>
+    
+    <!-- Tightened Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        connect-src 'self' https://api.stok.ly;
+        img-src 'self' data: https:;
+        font-src 'self' data:;
+        object-src 'none';
+        base-uri 'self';
+        form-action 'self';
+        frame-ancestors 'none';
+    ">
+    
+    <!-- Additional security headers -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+    
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <!-- Floating sidebar toggle button -->
+            <button type="button" class="floating-sidebar-toggle" id="floatingSidebarToggle" title="Toggle Processing Results">
+                📊
+            </button>
+            
+            <div class="container">
+                <h1>FTP Sync Tool Configuration</h1>
+                <p class="subtitle">Configure your API and FTP credentials for data synchronization</p>
+
+                <!-- API Credentials Button -->
+                <div class="credentials-section">
+                    <button type="button" class="btn btn-secondary" id="apiCredentialsBtn">
+                        <span class="btn-icon">🔐</span>
+                        Manage API Credentials
+                    </button>
+                    <div class="credentials-status" id="apiCredentialsStatus">
+                        <span class="status-indicator" id="apiStatusIndicator">●</span>
+                        <span id="apiStatusText">No API credentials stored</span>
+                    </div>
+                </div>
+
+                <!-- FTP Credentials Button -->
+                <div class="credentials-section">
+                    <button type="button" class="btn btn-secondary" id="ftpCredentialsBtn">
+                        <span class="btn-icon">📁</span>
+                        Manage FTP Credentials
+                    </button>
+                    <div class="credentials-status" id="ftpCredentialsStatus">
+                        <span class="status-indicator" id="ftpStatusIndicator">●</span>
+                        <span id="ftpStatusText">No FTP credentials stored</span>
+                    </div>
+                </div>
+
+                <!-- Basic Configuration Form -->
+                <form class="form" id="configForm">
+                    <div class="form-group">
+                        <label class="form-label" for="syncInterval">Sync Interval</label>
+                        <select id="syncInterval" name="syncInterval" class="form-select" required autocomplete="off">
+                            <option value="" disabled selected>Select sync interval</option>
+                            <option value="0.08">Every 5 seconds (testing)</option>
+                            <option value="1">Every 1 minute (testing)</option>
+                            <option value="5">Every 5 minutes</option>
+                            <option value="15">Every 15 minutes</option>
+                            <option value="30">Every 30 minutes</option>
+                            <option value="60">Every 1 hour</option>
+                            <option value="120">Every 2 hours</option>
+                            <option value="240">Every 4 hours</option>
+                            <option value="480">Every 8 hours</option>
+                            <option value="1440">Every 24 hours (daily)</option>
+                        </select>
+                    </div>
+                </form>
+
+                <div class="result" id="result">
+                    <h3>Configuration Status</h3>
+                    <div id="resultContent">
+                        <p>Please configure your credentials and settings...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar for Processing Results -->
+        <div class="sidebar" id="processingsidebar">
+            <div class="sidebar-header">
+                <h3>Processing Results</h3>
+                <div class="sidebar-controls">
+                    <button type="button" class="btn btn-small" id="clearResults">Clear All</button>
+                    <button type="button" class="btn btn-small sidebar-toggle" id="sidebarToggle">Hide</button>
+                </div>
+            </div>
+            
+            <div class="sidebar-content" id="sidebarContent">
+                <div class="no-results" id="noResults">
+                    <p>No processing results yet.</p>
+                    <p class="help-text">Results will appear here when sync operations are processed.</p>
+                </div>
+                
+                <!-- Results will be dynamically added here -->
+                <div class="results-list" id="resultsList">
+                    <!-- Dynamic results will appear here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API Credentials Modal -->
+    <div class="modal-overlay" id="apiCredentialsModal" tabindex="-1" role="dialog" aria-labelledby="apiCredentialsModalTitle" aria-hidden="true">
+        <div class="modal" tabindex="-1" role="document">
+            <div class="modal-header">
+                <h3 id="apiCredentialsModalTitle">Manage API Credentials</h3>
+                <button type="button" class="modal-close" id="closeApiModal" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="apiCredentialsForm" novalidate>
+                    <div class="form-group">
+                        <label class="form-label" for="apiClientId">Client ID</label>
+                        <input type="text" id="apiClientId" name="apiClientId" class="form-input" 
+                               placeholder="Enter client ID" required tabindex="1"
+                               autocomplete="off" spellcheck="false" 
+                               minlength="8" maxlength="100"
+                               pattern="[A-Za-z0-9\-_\.]{8,100}" 
+                               title="8-100 characters, letters, numbers, hyphens, underscores, dots only">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="apiSecretKey">Secret Key</label>
+                        <input type="password" id="apiSecretKey" name="apiSecretKey" class="form-input" 
+                               placeholder="Enter secret key" required tabindex="2"
+                               autocomplete="new-password" spellcheck="false" 
+                               minlength="16" maxlength="200"
+                               title="Minimum 16 characters required">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="apiAccountKey">Account Key</label>
+                        <input type="text" id="apiAccountKey" name="apiAccountKey" class="form-input" 
+                               placeholder="Enter account key" required tabindex="3"
+                               autocomplete="off" spellcheck="false" 
+                               minlength="8" maxlength="100"
+                               pattern="[A-Za-z0-9\-_\.]{8,100}" 
+                               title="8-100 characters, letters, numbers, hyphens, underscores, dots only">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-checkbox">
+                            <input type="checkbox" id="showApiPassword" tabindex="4">
+                            <label for="showApiPassword">Show secret key</label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="clearApiCredentials" tabindex="5">Clear Credentials</button>
+                <button type="button" class="btn" id="saveApiCredentials" tabindex="6">Save Credentials</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FTP Credentials Modal -->
+    <div class="modal-overlay" id="ftpCredentialsModal" tabindex="-1" role="dialog" aria-labelledby="ftpCredentialsModalTitle" aria-hidden="true">
+        <div class="modal" tabindex="-1" role="document">
+            <div class="modal-header">
+                <h3 id="ftpCredentialsModalTitle">Manage FTP Credentials</h3>
+                <button type="button" class="modal-close" id="closeFtpModal" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="ftpCredentialsForm" novalidate>
+                    <div class="form-group">
+                        <label class="form-label" for="ftpHost">FTP Host</label>
+                        <input type="text" id="ftpHost" name="ftpHost" class="form-input" 
+                               placeholder="ftp.example.com" required tabindex="1"
+                               autocomplete="off" spellcheck="false" 
+                               pattern="[A-Za-z0-9\-\.]{3,255}" 
+                               title="Valid hostname or IP address">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ftpPort">FTP Port</label>
+                        <input type="text" id="ftpPort" name="ftpPort" class="form-input" 
+                               placeholder="22" value="22" required tabindex="2"
+                               autocomplete="off" spellcheck="false" 
+                               maxlength="5"
+                               title="Port number (e.g., 21, 22, 990, 21000)">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ftpUsername">Username</label>
+                        <input type="text" id="ftpUsername" name="ftpUsername" class="form-input" 
+                               placeholder="Enter FTP username" required tabindex="3"
+                               autocomplete="off" spellcheck="false" 
+                               maxlength="100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ftpPassword">Password</label>
+                        <input type="password" id="ftpPassword" name="ftpPassword" class="form-input" 
+                               placeholder="Enter FTP password" required tabindex="4"
+                               autocomplete="new-password" spellcheck="false" 
+                               maxlength="200">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ftpDirectory">Remote Directory</label>
+                        <input type="text" id="ftpDirectory" name="ftpDirectory" class="form-input" 
+                               placeholder="/path/to/remote/directory" tabindex="5"
+                               autocomplete="off" spellcheck="false" 
+                               title="Optional: Remote directory path">
+                    </div>
+                    <div class="form-group">
+                        <div class="form-checkbox">
+                            <input type="checkbox" id="ftpSecure" name="ftpSecure" tabindex="6">
+                            <label for="ftpSecure">Use FTPS (secure FTP)</label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="form-checkbox">
+                            <input type="checkbox" id="showFtpPassword" tabindex="7">
+                            <label for="showFtpPassword">Show password</label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="clearFtpCredentials" tabindex="8">Clear Credentials</button>
+                <button type="button" class="btn" id="saveFtpCredentials" tabindex="9">Save Credentials</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts loaded in security-conscious order -->
+    <script src="stokly-api.js"></script>
+    <script src="credentials-handler.js"></script>
+    <script src="form-handler.js"></script>
+    <script src="sync-controller.js"></script>
+    
+    <!-- Security validation script -->
+    <script>
+        // Validate CSP compliance on load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for inline scripts (should be none)
+            const inlineScripts = document.querySelectorAll('script:not([src])');
+            if (inlineScripts.length > 1) { // Allow this validation script only
+                console.warn('Inline scripts detected - potential CSP violation');
+            }
+            
+            // Validate form inputs have proper security attributes
+            const inputs = document.querySelectorAll('input[type="text"], input[type="password"]');
+            inputs.forEach(input => {
+                if (!input.hasAttribute('autocomplete') || !input.hasAttribute('spellcheck')) {
+                    console.warn(`Input ${input.id} missing security attributes`);
+                }
+            });
+            
+            console.log('Security validation completed');
+        });
+    </script>
+</body>
+</html>
