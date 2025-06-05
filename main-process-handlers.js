@@ -241,7 +241,12 @@ async function setupIPCHandlers() {
                 processedCount: result.processedCount,
                 errorCount: result.errorCount,
                 totalFiles: result.totalFiles,
-                newFiles: result.newFiles
+                newFiles: result.newFiles,
+                deletedCount: result.deletedCount,
+                deletionErrors: result.deletionErrors,
+                skippedCount: result.skippedCount,
+                debugDeleteFiles: result.debugDeleteFiles,
+                debugSkipProcessed: result.debugSkipProcessed
             };
         } catch (error) {
             console.error('Test sync failed:', error);
@@ -314,6 +319,46 @@ async function setupIPCHandlers() {
             return { success: true, files };
         } catch (error) {
             console.error('Error getting processed files:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Manually delete a specific file from remote server
+    ipcMain.handle('delete-remote-file', async (event, config) => {
+        try {
+            if (!sftpManager) await initializeStore();
+            
+            const result = await sftpManager.manuallyDeleteFile(
+                config.credentials,
+                config.remotePath,
+                config.fileName
+            );
+            
+            return result;
+        } catch (error) {
+            console.error('Failed to delete remote file:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Clean up orphaned files (files that exist remotely but are marked as processed)
+    ipcMain.handle('cleanup-orphaned-files', async (event, config) => {
+        try {
+            if (!sftpManager) await initializeStore();
+            
+            const result = await sftpManager.cleanupOrphanedFiles(
+                config.credentials,
+                config.remotePath
+            );
+            
+            return { 
+                success: true, 
+                deletedCount: result.deletedCount,
+                errorCount: result.errorCount,
+                totalOrphaned: result.totalOrphaned
+            };
+        } catch (error) {
+            console.error('Failed to cleanup orphaned files:', error);
             return { success: false, error: error.message };
         }
     });

@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearProcessedFiles: () => ipcRenderer.invoke('clear-processed-files'),
     getProcessedFiles: () => ipcRenderer.invoke('get-processed-files'),
     
+    // NEW: File deletion and cleanup operations
+    deleteRemoteFile: (config) => ipcRenderer.invoke('delete-remote-file', config),
+    cleanupOrphanedFiles: (config) => ipcRenderer.invoke('cleanup-orphaned-files', config),
+    
     // Optional: Add more utility functions
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     showMessageBox: (options) => ipcRenderer.invoke('show-message-box', options)

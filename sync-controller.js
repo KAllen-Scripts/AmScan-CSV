@@ -8,6 +8,7 @@ class SyncController {
             isRunning: false,
             lastSync: null,
             totalProcessed: 0,
+            totalDeleted: 0,
             errors: 0
         };
         
@@ -35,18 +36,6 @@ class SyncController {
         setTimeout(() => {
             this.autoStartSync();
         }, 2000);
-    }
-
-    addSyncControls() {
-        // No UI controls needed - sync runs automatically
-    }
-
-    addSyncStyles() {
-        // No styles needed for sync controls
-    }
-
-    setupEventListeners() {
-        // No event listeners needed for sync controls
     }
 
     async autoStartSync() {
@@ -123,9 +112,94 @@ class SyncController {
         };
     }
 
+    // Public methods for manual operations
+    async runCleanupOrphanedFiles() {
+        try {
+            const validation = await this.validateSyncRequirements();
+            if (!validation.valid) {
+                console.error(`Cannot run cleanup: ${validation.message}`);
+                return;
+            }
+
+            console.log('Running cleanup of orphaned files...');
+            
+            const result = await window.electronAPI.cleanupOrphanedFiles({
+                credentials: validation.ftpCredentials,
+                remotePath: validation.ftpCredentials.directory || '/'
+            });
+
+            if (result.success) {
+                console.log(`Cleanup completed: ${result.deletedCount} files deleted, ${result.errorCount} errors`);
+                
+                // Add result to sidebar
+                window.sidebarManager.addResult({
+                    type: 'cleanup_completed',
+                    timestamp: new Date().toISOString(),
+                    deletedCount: result.deletedCount,
+                    errorCount: result.errorCount,
+                    totalOrphaned: result.totalOrphaned
+                });
+            } else {
+                throw new Error(result.error || 'Cleanup failed');
+            }
+
+        } catch (error) {
+            console.error('Failed to run cleanup:', error);
+            window.sidebarManager.addResult({
+                type: 'cleanup_error',
+                timestamp: new Date().toISOString(),
+                error: error.message
+            });
+        }
+    }
+
+    async deleteSpecificFile(fileName) {
+        try {
+            const validation = await this.validateSyncRequirements();
+            if (!validation.valid) {
+                console.error(`Cannot delete file: ${validation.message}`);
+                return;
+            }
+
+            console.log(`Manually deleting file: ${fileName}`);
+            
+            const result = await window.electronAPI.deleteRemoteFile({
+                credentials: validation.ftpCredentials,
+                remotePath: validation.ftpCredentials.directory || '/',
+                fileName: fileName
+            });
+
+            if (result.success) {
+                console.log(`Successfully deleted file: ${fileName}`);
+                
+                // Add result to sidebar
+                window.sidebarManager.addResult({
+                    type: 'manual_file_deleted',
+                    timestamp: new Date().toISOString(),
+                    fileName: fileName
+                });
+            } else {
+                throw new Error(result.error || 'File deletion failed');
+            }
+
+        } catch (error) {
+            console.error(`Failed to delete file ${fileName}:`, error);
+            window.sidebarManager.addResult({
+                type: 'manual_deletion_error',
+                timestamp: new Date().toISOString(),
+                fileName: fileName,
+                error: error.message
+            });
+        }
+    }
+
     updateSyncStatus(message, type = 'info') {
-        // No UI status updates needed - just log to console
+        // Log to console and update internal status
         console.log(`Sync Status: ${message}`);
+        
+        if (type === 'success') {
+            this.syncStatus.lastSync = new Date().toISOString();
+        }
     }
 
     // Public methods for external access
@@ -149,7 +223,7 @@ class SyncController {
     }
 }
 
-// Simple Sidebar Manager for displaying results
+// Enhanced Sidebar Manager for displaying results with deletion support
 class SidebarManager {
     constructor() {
         this.results = [];
@@ -229,15 +303,65 @@ class SidebarManager {
                     : `Test failed: ${result.error}`;
                 break;
             case 'sync_completed':
-                content = `Sync completed - ${result.processedCount} new files processed`;
+                let syncDetails = `${result.processedCount} files processed`;
+                if (result.deletedCount !== undefined) {
+                    syncDetails += `, ${result.deletedCount} deleted`;
+                }
+                if (result.skippedCount !== undefined && result.skippedCount > 0) {
+                    syncDetails += `, ${result.skippedCount} skipped`;
+                }
+                if (result.deletionErrors && result.deletionErrors > 0) {
+                    syncDetails += ` (${result.deletionErrors} deletion errors)`;
+                }
+                
+                // Add debug mode indicators
+                let debugInfo = '';
+                if (result.debugDeleteFiles !== undefined || result.debugSkipProcessed !== undefined) {
+                    const deleteStatus = result.debugDeleteFiles ? 'ON' : 'OFF';
+                    const skipStatus = result.debugSkipProcessed ? 'ON' : 'OFF';
+                    debugInfo = ` [🐛 DEBUG: Delete=${deleteStatus}, Skip=${skipStatus}]`;
+                }
+                
+                content = `Sync completed - ${syncDetails}${debugInfo}`;
                 break;
             case 'file_processed':
                 content = `File processed: ${result.fileName} (${result.contentLength} chars)`;
                 break;
+            case 'file_deleted':
+                const deletePrefix = result.debugMode ? '🐛 DEBUG: ' : '✅ ';
+                content = `${deletePrefix}File deleted from server: ${result.fileName}`;
+                break;
+            case 'deletion_error':
+                const errorPrefix = result.debugMode ? '🐛 DEBUG: ' : '⚠️ ';
+                content = `${errorPrefix}Failed to delete: ${result.fileName} - ${result.error}`;
+                break;
+            case 'deletion_skipped':
+                content = `🐛 DEBUG: Deletion SKIPPED: ${result.fileName} (left on server)`;
+                break;
+            case 'cleanup_completed':
+                content = `Cleanup completed - ${result.deletedCount} orphaned files deleted, ${result.errorCount} errors`;
+                break;
+            case 'cleanup_error':
+                content = `Cleanup failed: ${result.error}`;
+                break;
+            case 'manual_file_deleted':
+                content = `Manually deleted: ${result.fileName}`;
+                break;
+            case 'manual_deletion_error':
+                content = `Manual deletion failed: ${result.fileName} - ${result.error}`;
+                break;
             case 'auto_sync_started':
-                content = result.autoStarted 
+                let startContent = result.autoStarted 
                     ? `Auto sync started automatically (${result.intervalMinutes}min interval)`
                     : `Auto sync started (${result.intervalMinutes}min interval)`;
+                
+                // Only add deletion info if we have debug info available
+                if (result.debugDeleteFiles !== undefined) {
+                    const deleteStatus = result.debugDeleteFiles ? 'ENABLED' : 'DISABLED';
+                    startContent += ` - File deletion ${deleteStatus}`;
+                }
+                
+                content = startContent;
                 break;
             case 'auto_sync_stopped':
                 content = result.manualStop 
@@ -267,6 +391,13 @@ class SidebarManager {
             test_sync: '🧪',
             sync_completed: '✅',
             file_processed: '📄',
+            file_deleted: '🗑️',
+            deletion_error: '⚠️',
+            deletion_skipped: '⏭️',
+            cleanup_completed: '🧹',
+            cleanup_error: '❌',
+            manual_file_deleted: '🗑️',
+            manual_deletion_error: '⚠️',
             auto_sync_started: '▶️',
             auto_sync_stopped: '⏹️',
             sync_error: '❌'
