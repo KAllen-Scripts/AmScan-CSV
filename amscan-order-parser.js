@@ -41,27 +41,30 @@ function processAmscanFile(fileName, fileContent) {
                           "surname": orderHeader.customerAccount
                       },
                       "address": {
-                          "line1": 'undefined',
-                          "city": 'undefined',
+                          "line1": orderHeader.deliveryAddressLine1,
+                          "line2": orderHeader.deliveryAddressLine2,
+                          "city": extractCityFromDeliveryAddress(orderHeader),
                           "country": 'GB',
-                          "postcode": 'undefined'
+                          "postcode": extractPostcodeFromDeliveryAddress(orderHeader),
+                          "region": ''
                       },
                       "option": "historicOrder",
-                      "cost": parseFloat(row['postage']),
-                      "tax": parseFloat(row['postage vat'])
+                      "cost": 0,
+                      "tax": 0
                   },
                   "items": [],
-                  itemCount: [],
                   customer: {
                       "name": {
-                          "forename": (row['bill-to name'].trim()).split(' ')[0],
-                          "surname": (row['bill-to name'].trim()).split(' ').slice(1).join(' ') || 'undefined'
+                            "forename": orderHeader.deliveryName,
+                            "surname": orderHeader.customerAccount
                       },
                       "address": {
-                          "line1": row['billing address 1'],
-                          "city": row['billing town'],
-                          "country": countryToAlpha2(row['country']),
-                          "postcode": row['shipping post code']
+                          "line1": orderHeader.deliveryAddressLine1,
+                          "line2": orderHeader.deliveryAddressLine2,
+                          "city": extractCityFromDeliveryAddress(orderHeader),
+                          "country": 'GB',
+                          "postcode": extractPostcodeFromDeliveryAddress(orderHeader),
+                          "region": ''
                       },
                       email: row['customer email'],
                       phone: row['telephone']
@@ -79,6 +82,50 @@ function processAmscanFile(fileName, fileContent) {
             console.error(`Error parsing ${fileName}:`, parseError.message);
         }
     }
+}
+
+/**
+ * Extract city from delivery address fields
+ */
+function extractCityFromDeliveryAddress(orderHeader) {
+    // Look through address lines to find city (typically in the last non-empty line before postcode)
+    const addressLines = [
+        orderHeader.deliveryAddressLine3,
+        orderHeader.deliveryAddressLine4,
+        orderHeader.deliveryAddressLine5
+    ].filter(line => line && line.trim() !== '');
+    
+    if (addressLines.length > 0) {
+        const lastLine = addressLines[addressLines.length - 1];
+        // Split by spaces and take all but last 2 parts as city (postcode is usually last 2 parts)
+        const parts = lastLine.trim().split(/\s+/);
+        if (parts.length >= 3) {
+            return parts.slice(0, -2).join(' ');
+        }
+    }
+    return '';
+}
+
+/**
+ * Extract postcode from delivery address fields
+ */
+function extractPostcodeFromDeliveryAddress(orderHeader) {
+    // Look through address lines to find postcode (typically in the last non-empty line)
+    const addressLines = [
+        orderHeader.deliveryAddressLine3,
+        orderHeader.deliveryAddressLine4,
+        orderHeader.deliveryAddressLine5
+    ].filter(line => line && line.trim() !== '');
+    
+    if (addressLines.length > 0) {
+        const lastLine = addressLines[addressLines.length - 1];
+        // UK postcodes are typically the last 2 parts when split by spaces
+        const parts = lastLine.trim().split(/\s+/);
+        if (parts.length >= 2) {
+            return parts.slice(-2).join(' ');
+        }
+    }
+    return '';
 }
 
 /**
