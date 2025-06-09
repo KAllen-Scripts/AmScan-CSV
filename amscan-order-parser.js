@@ -7,7 +7,6 @@
  * @param {string} fileContent - Raw content of the file
  */
 
-const addressParser = require('address-parser');
 
 function processAmscanFile(fileName, fileContent) {
     // Check if this looks like an order file
@@ -17,10 +16,10 @@ function processAmscanFile(fileName, fileContent) {
                 // Log the two data structures as requested
                 console.log('ORDER HEADER:');
                 console.log(JSON.stringify(orderHeader, null, 2));
-                
+
                 console.log('\nORDER ITEMS:');
                 console.log(JSON.stringify(orderItems, null, 2));
-                
+
                 const productCodes = data.map(item => item.productCode);
 
                 for (let i = 0; i < productCodes.length; i += 200) {
@@ -29,53 +28,51 @@ function processAmscanFile(fileName, fileContent) {
                 }
 
 
-                let order = {
-                            createdAt: date,
-                            "currency": "GBP",
-                            "stage": "order",
-                            "sourceType": 'other',
-                            "sourceReferenceId": orderHeader.orderId,
-                            "sourceId": '0e95de59-6f4c-4f69-9ec1-0d82e3b5f759',
-                            "shipping": {
-                                "name": {
-                                    "forename": orderHeader.deliveryName,
-                                    "surname": orderHeader.customerAccount
-                                },
-                                "address": {
-                                    "line1": 'undefined',
-                                    "city": 'undefined',
-                                    "country": 'GB',
-                                    "postcode": 'undefined'
-                                },
-                                "option": "historicOrder",
-                                "cost": parseFloat(row['postage']),
-                                "tax": parseFloat(row['postage vat'])
-                            },
-                            "items": [],
-                            itemCount: [],
-                            customer: {
-                                "name": {
-                                    "forename": (row['bill-to name'].trim()).split(' ')[0],
-                                    "surname": (row['bill-to name'].trim()).split(' ').slice(1).join(' ') || 'undefined'
-                                },
-                                "address": {
-                                    "line1": row['billing address 1'],
-                                    "city": row['billing town'],
-                                    "country": countryToAlpha2(row['country']),
-                                    "postcode": row['shipping post code']
-                                },
-                                email: row['customer email'],
-                                phone: row['telephone']
-                            },
-                            payments: [
-                                {
-                                    method: 4,
-                                    amount: parseFloat(row['postage']) + parseFloat(row['postage vat']),
-                                    label: 'Imported Order',
-                                    timestamp: date
-                                }
-                            ]
-                        }
+              let order = {
+                  createdAt: date,
+                  "currency": "GBP",
+                  "stage": "order",
+                  "sourceType": 'other',
+                  "sourceReferenceId": orderHeader.orderId,
+                  "sourceId": '0e95de59-6f4c-4f69-9ec1-0d82e3b5f759',
+                  "shipping": {
+                      "name": {
+                          "forename": orderHeader.deliveryName,
+                          "surname": orderHeader.customerAccount
+                      },
+                      "address": {
+                          "line1": 'undefined',
+                          "city": 'undefined',
+                          "country": 'GB',
+                          "postcode": 'undefined'
+                      },
+                      "option": "historicOrder",
+                      "cost": parseFloat(row['postage']),
+                      "tax": parseFloat(row['postage vat'])
+                  },
+                  "items": [],
+                  itemCount: [],
+                  customer: {
+                      "name": {
+                          "forename": (row['bill-to name'].trim()).split(' ')[0],
+                          "surname": (row['bill-to name'].trim()).split(' ').slice(1).join(' ') || 'undefined'
+                      },
+                      "address": {
+                          "line1": row['billing address 1'],
+                          "city": row['billing town'],
+                          "country": countryToAlpha2(row['country']),
+                          "postcode": row['shipping post code']
+                      },
+                      email: row['customer email'],
+                      phone: row['telephone']
+                  },
+                  payments: [{
+                      method: 4,
+                      amount: parseFloat(row['postage']) + parseFloat(row['postage vat']),
+                      label: 'Imported Order',
+                      timestamp: date
+                  }]
+              }
 
             });
         } catch (parseError) {
@@ -99,7 +96,7 @@ function parseAmscanOrderFile(fileContent, processOrderCallback) {
     }
 
     const lines = fileContent.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-    
+
     let currentOrderHeader = null;
     let currentOrderItems = [];
 
@@ -276,126 +273,31 @@ if (typeof module !== 'undefined' && module.exports) {
     };
 }
 
-function parseUKAddress(addressString) {
-  if (!addressString || typeof addressString !== 'string') {
-    throw new Error('Address string is required and must be a string');
-  }
-
-  // Clean the input string
-  const cleanAddress = addressString.trim();
-  
-  // Parse the address using address-parser
-  const parsed = addressParser.parseAddress(cleanAddress);
-  
-  // Extract postcode using regex (UK postcode pattern)
-  const postcodeRegex = /\b[A-Z]{1,2}[0-9R][0-9A-Z]?\s*[0-9][A-Z]{2}\b/i;
-  const postcodeMatch = cleanAddress.match(postcodeRegex);
-  const postcode = postcodeMatch ? postcodeMatch[0].trim().toUpperCase() : '';
-  
-  // Split address into components, removing postcode
-  let addressWithoutPostcode = cleanAddress;
-  if (postcode) {
-    addressWithoutPostcode = cleanAddress.replace(postcodeRegex, '').trim();
-  }
-  
-  // Split by commas and clean up
-  const parts = addressWithoutPostcode.split(',').map(part => part.trim()).filter(part => part.length > 0);
-  
-  // Initialize result structure
-  const result = {
-    line1: '',
-    line2: '',
-    city: '',
-    region: '',
-    country: 'United Kingdom', // Default for UK addresses
-    postcode: postcode
-  };
-  
-  if (parts.length === 0) {
-    // If no parts, try to use the parsed result
-    result.line1 = parsed.street || cleanAddress.replace(postcodeRegex, '').trim();
-    return result;
-  }
-  
-  // Map parts to address components
-  if (parts.length >= 1) {
-    result.line1 = parts[0];
-  }
-  
-  if (parts.length >= 2) {
-    // Last part is usually city (before postcode)
-    result.city = parts[parts.length - 1];
-    
-    // Second-to-last might be region/county if we have enough parts
-    if (parts.length >= 3) {
-      result.region = parts[parts.length - 2];
-      
-      // If we have more than 3 parts, combine middle parts as line2
-      if (parts.length > 3) {
-        result.line2 = parts.slice(1, -2).join(', ');
-      } else {
-        result.line2 = parts[1];
-      }
-    } else {
-      // Only 2 parts, second one goes to line2 unless it looks like a city
-      const cityKeywords = ['london', 'manchester', 'birmingham', 'leeds', 'glasgow', 'sheffield', 'bradford', 'liverpool', 'edinburgh', 'bristol'];
-      const isLikelyCity = cityKeywords.some(city => parts[1].toLowerCase().includes(city));
-      
-      if (isLikelyCity) {
-        result.city = parts[1];
-      } else {
-        result.line2 = parts[1];
-      }
-    }
-  }
-  
-  // Use parsed data to fill in missing city if we have it
-  if (!result.city && parsed.city) {
-    result.city = parsed.city;
-  }
-  
-  // Use parsed data for region if we don't have it
-  if (!result.region && parsed.state) {
-    result.region = parsed.state;
-  }
-  
-  // Ensure we have at least the required fields
-  if (!result.line1) {
-    result.line1 = parts[0] || cleanAddress.replace(postcodeRegex, '').trim();
-  }
-  
-  if (!result.city && parts.length > 0) {
-    result.city = parts[parts.length - 1];
-  }
-  
-  return result;
-}
-
 /**
  * Batch parse multiple addresses
  * @param {string[]} addresses - Array of address strings
  * @returns {Object[]} Array of parsed addresses
  */
 function parseMultipleUKAddresses(addresses) {
-  if (!Array.isArray(addresses)) {
-    throw new Error('Input must be an array of address strings');
-  }
-  
-  return addresses.map((address, index) => {
-    try {
-      return parseUKAddress(address);
-    } catch (error) {
-      console.warn(`Failed to parse address at index ${index}: ${error.message}`);
-      return {
-        line1: address || '',
-        line2: '',
-        city: '',
-        region: '',
-        country: 'United Kingdom',
-        postcode: ''
-      };
+    if (!Array.isArray(addresses)) {
+        throw new Error('Input must be an array of address strings');
     }
-  });
+
+    return addresses.map((address, index) => {
+        try {
+            return parseUKAddress(address);
+        } catch (error) {
+            console.warn(`Failed to parse address at index ${index}: ${error.message}`);
+            return {
+                line1: address || '',
+                line2: '',
+                city: '',
+                region: '',
+                country: 'United Kingdom',
+                postcode: ''
+            };
+        }
+    });
 }
 
 // Make available globally for browser use
