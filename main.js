@@ -122,7 +122,7 @@ function createTray() {
   }
   
   tray = new Tray(trayIcon);
-  tray.setToolTip('Morrisons EDI');
+  tray.setToolTip('AmScan Order Processor');
   
   const contextMenu = Menu.buildFromTemplate([
     {

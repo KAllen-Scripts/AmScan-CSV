@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FTP Sync Tool</title>
+    <title>AmScan Order Processor</title>
     
     <!-- Tightened Content Security Policy -->
     <meta http-equiv="Content-Security-Policy" content="
@@ -16,15 +16,13 @@
         object-src 'none';
         base-uri 'self';
         form-action 'self';
-        frame-ancestors 'none';
     ">
     
     <!-- Additional security headers -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
-    <meta http-equiv="X-Frame-Options" content="DENY">
-    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
     
+    <!-- Your CSS files -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -37,10 +35,16 @@
             </button>
             
             <div class="container">
-                <h1>FTP Sync Tool Configuration</h1>
-                <p class="subtitle">Configure your API and FTP credentials for data synchronization</p>
+                <div class="task-status-container">
+                    <label>Task Status:</label>
+                    <span id="taskStatus" class="task-status idle">⏸️ Idle</span>
+                    <div id="taskStats" class="task-stats"></div>
+                </div>
+                
+                <h1>AmScan Order Processor</h1>
+                <p class="subtitle">Configure API and FTP credentials for order processing</p>
 
-                <!-- API Credentials Button -->
+                <!-- API Credentials Section -->
                 <div class="credentials-section">
                     <button type="button" class="btn btn-secondary" id="apiCredentialsBtn">
                         <span class="btn-icon">🔐</span>
@@ -52,7 +56,7 @@
                     </div>
                 </div>
 
-                <!-- FTP Credentials Button -->
+                <!-- FTP Credentials Section -->
                 <div class="credentials-section">
                     <button type="button" class="btn btn-secondary" id="ftpCredentialsBtn">
                         <span class="btn-icon">📁</span>
@@ -64,30 +68,36 @@
                     </div>
                 </div>
 
-                <!-- Basic Configuration Form -->
-                <form class="form" id="configForm">
-                    <div class="form-group">
-                        <label class="form-label" for="syncInterval">Sync Interval</label>
-                        <select id="syncInterval" name="syncInterval" class="form-select" required autocomplete="off">
-                            <option value="" disabled selected>Select sync interval</option>
-                            <option value="0.08">Every 5 seconds (testing)</option>
-                            <option value="1">Every 1 minute (testing)</option>
-                            <option value="5">Every 5 minutes</option>
-                            <option value="15">Every 15 minutes</option>
-                            <option value="30">Every 30 minutes</option>
-                            <option value="60">Every 1 hour</option>
-                            <option value="120">Every 2 hours</option>
-                            <option value="240">Every 4 hours</option>
-                            <option value="480">Every 8 hours</option>
-                            <option value="1440">Every 24 hours (daily)</option>
-                        </select>
+                <!-- Processing Status -->
+                <div class="processing-status">
+                    <h3>Processing Status</h3>
+                    <div id="processingResults">
+                        <p>Waiting for files to process...</p>
                     </div>
-                </form>
+                </div>
 
-                <div class="result" id="result">
-                    <h3>Configuration Status</h3>
+                <!-- Simple Timer Control -->
+                <div class="form-group">
+                    <label class="form-label" for="timerCycle">Auto-Sync Interval</label>
+                    <select id="timerCycle" name="timerCycle" class="form-select" autocomplete="off">
+                        <option value="" disabled>Select timer interval</option>
+                        <option value="0.08" selected>Every 5 seconds (testing)</option>
+                        <option value="1">Every 1 minute (testing)</option>
+                        <option value="30">Every 30 minutes</option>
+                        <option value="60">Every 1 hour</option>
+                        <option value="120">Every 2 hours</option>
+                        <option value="240">Every 4 hours</option>
+                        <option value="480">Every 8 hours</option>
+                        <option value="720">Every 12 hours</option>
+                        <option value="1440">Every 24 hours (daily)</option>
+                    </select>
+                </div>
+
+                <!-- Result Display -->
+                <div class="result" id="result" style="display: none;">
+                    <h3>Status</h3>
                     <div id="resultContent">
-                        <p>Please configure your credentials and settings...</p>
+                        <p>Ready to process orders...</p>
                     </div>
                 </div>
             </div>
@@ -106,7 +116,7 @@
             <div class="sidebar-content" id="sidebarContent">
                 <div class="no-results" id="noResults">
                     <p>No processing results yet.</p>
-                    <p class="help-text">Results will appear here when sync operations are processed.</p>
+                    <p class="help-text">Results will appear here when files are processed.</p>
                 </div>
                 
                 <!-- Results will be dynamically added here -->
@@ -180,43 +190,36 @@
                         <label class="form-label" for="ftpHost">FTP Host</label>
                         <input type="text" id="ftpHost" name="ftpHost" class="form-input" 
                                placeholder="ftp.example.com" required tabindex="1"
-                               autocomplete="off" spellcheck="false" 
-                               pattern="[A-Za-z0-9\-\.]{3,255}" 
-                               title="Valid hostname or IP address">
+                               autocomplete="off" spellcheck="false">
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="ftpPort">FTP Port</label>
-                        <input type="text" id="ftpPort" name="ftpPort" class="form-input" 
+                        <label class="form-label" for="ftpPort">Port</label>
+                        <input type="number" id="ftpPort" name="ftpPort" class="form-input" 
                                placeholder="22" value="22" required tabindex="2"
-                               autocomplete="off" spellcheck="false" 
-                               maxlength="5"
-                               title="Port number (e.g., 21, 22, 990, 21000)">
+                               min="1" max="65535">
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="ftpUsername">Username</label>
                         <input type="text" id="ftpUsername" name="ftpUsername" class="form-input" 
-                               placeholder="Enter FTP username" required tabindex="3"
-                               autocomplete="off" spellcheck="false" 
-                               maxlength="100">
+                               placeholder="Enter username" required tabindex="3"
+                               autocomplete="off" spellcheck="false">
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="ftpPassword">Password</label>
                         <input type="password" id="ftpPassword" name="ftpPassword" class="form-input" 
-                               placeholder="Enter FTP password" required tabindex="4"
-                               autocomplete="new-password" spellcheck="false" 
-                               maxlength="200">
+                               placeholder="Enter password" required tabindex="4"
+                               autocomplete="new-password" spellcheck="false">
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="ftpDirectory">Remote Directory</label>
+                        <label class="form-label" for="ftpDirectory">Directory</label>
                         <input type="text" id="ftpDirectory" name="ftpDirectory" class="form-input" 
-                               placeholder="/path/to/remote/directory" tabindex="5"
-                               autocomplete="off" spellcheck="false" 
-                               title="Optional: Remote directory path">
+                               placeholder="/path/to/files (optional)" tabindex="5"
+                               autocomplete="off" spellcheck="false">
                     </div>
                     <div class="form-group">
                         <div class="form-checkbox">
-                            <input type="checkbox" id="ftpSecure" name="ftpSecure" tabindex="6">
-                            <label for="ftpSecure">Use FTPS (secure FTP)</label>
+                            <input type="checkbox" id="ftpSecure" tabindex="6">
+                            <label for="ftpSecure">Use SFTP (Secure)</label>
                         </div>
                     </div>
                     <div class="form-group">
@@ -236,30 +239,10 @@
 
     <!-- Scripts loaded in security-conscious order -->
     <script src="stokly-api.js"></script>
+    <script src="amscan-order-parser.js"></script>
+    <script src="processing-results-manager.js"></script>
     <script src="credentials-handler.js"></script>
-    <script src="form-handler.js"></script>
-    <script src="sync-controller.js"></script>
-    
-    <!-- Security validation script -->
-    <script>
-        // Validate CSP compliance on load
-        document.addEventListener('DOMContentLoaded', function() {
-            // Check for inline scripts (should be none)
-            const inlineScripts = document.querySelectorAll('script:not([src])');
-            if (inlineScripts.length > 1) { // Allow this validation script only
-                console.warn('Inline scripts detected - potential CSP violation');
-            }
-            
-            // Validate form inputs have proper security attributes
-            const inputs = document.querySelectorAll('input[type="text"], input[type="password"]');
-            inputs.forEach(input => {
-                if (!input.hasAttribute('autocomplete') || !input.hasAttribute('spellcheck')) {
-                    console.warn(`Input ${input.id} missing security attributes`);
-                }
-            });
-            
-            console.log('Security validation completed');
-        });
-    </script>
+    <script src="timer-manager.js"></script>
+    <script src="security-validation.js"></script>
 </body>
 </html>

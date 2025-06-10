@@ -2,12 +2,10 @@ const { ipcMain, dialog, app, BrowserWindow } = require('electron');
 const fs = require('fs').promises;
 const path = require('path');
 const EncryptionUtils = require('./encryption-utils');
-const SFTPManager = require('./sftp-manager');
 
 let Store;
 let store;
 let encryptionUtils;
-let sftpManager;
 
 // Initialize the store with dynamic import
 async function initializeStore() {
@@ -16,15 +14,12 @@ async function initializeStore() {
         Store = storeModule.default;
         
         store = new Store({
-            name: 'morrisons-edi-sync-tool-config',
+            name: 'sync-tool-config',
             // Note: We're handling encryption manually now for better control
         });
         
         // Initialize encryption utilities
         encryptionUtils = new EncryptionUtils();
-        
-        // Initialize SFTP manager
-        sftpManager = new SFTPManager();
     }
     return store;
 }
@@ -39,8 +34,8 @@ async function setupIPCHandlers() {
         try {
             if (!store) await initializeStore();
             
-            store.set('morrisonsEDI_formConfig', config);
-            store.set('morrisonsEDI_lastSaved', new Date().toISOString());
+            store.set('formConfig', config);
+            store.set('lastSaved', new Date().toISOString());
             return { success: true };
         } catch (error) {
             console.error('Error saving configuration:', error);
@@ -53,7 +48,7 @@ async function setupIPCHandlers() {
         try {
             if (!store) await initializeStore();
             
-            const config = store.get('morrisonsEDI_formConfig', {});
+            const config = store.get('formConfig', {});
             return config;
         } catch (error) {
             console.error('Error loading configuration:', error);
@@ -66,8 +61,8 @@ async function setupIPCHandlers() {
         try {
             if (!store) await initializeStore();
             
-            store.delete('morrisonsEDI_formConfig');
-            store.delete('morrisonsEDI_lastSaved');
+            store.delete('formConfig');
+            store.delete('lastSaved');
             return { success: true };
         } catch (error) {
             console.error('Error clearing configuration:', error);
@@ -124,31 +119,35 @@ async function setupIPCHandlers() {
         return result;
     });
 
-    // Save encrypted credentials (supports both API and FTP credentials)
-    ipcMain.handle('save-credentials', async (event, credentialType, credentials) => {
+    // Save encrypted credentials - FIXED to use proper FTP sync app naming
+    ipcMain.handle('save-credentials', async (event, credentialsType, credentials) => {
         try {
             if (!store) await initializeStore();
+            
+            // FIXED: Create proper key based on credentials type for FTP sync app
+            const storageKey = `ftpSyncApp_${credentialsType}`;
             
             // Encrypt the credentials using AES-256-GCM
             const encryptedCredentials = encryptionUtils.encryptCredentials(credentials);
             
-            // Store the encrypted data with unique keys
-            const storeKey = credentialType === 'apiCredentials' ? 'morrisonsEDI_userApiCredentials' : 'morrisonsEDI_userFtpCredentials';
-            store.set(storeKey, encryptedCredentials);
+            // Store the encrypted data
+            store.set(storageKey, encryptedCredentials);
             return { success: true };
         } catch (error) {
-            console.error(`Error saving ${credentialType}:`, error);
+            console.error('Error saving credentials:', error);
             throw error;
         }
     });
 
-    // Load encrypted credentials (supports both API and FTP credentials)
-    ipcMain.handle('load-credentials', async (event, credentialType) => {
+    // Load encrypted credentials - FIXED to use proper FTP sync app naming
+    ipcMain.handle('load-credentials', async (event, credentialsType) => {
         try {
             if (!store) await initializeStore();
             
-            const storeKey = credentialType === 'apiCredentials' ? 'morrisonsEDI_userApiCredentials' : 'morrisonsEDI_userFtpCredentials';
-            const encryptedCredentials = store.get(storeKey);
+            // FIXED: Create proper key based on credentials type for FTP sync app
+            const storageKey = `ftpSyncApp_${credentialsType}`;
+            
+            const encryptedCredentials = store.get(storageKey);
             if (!encryptedCredentials) {
                 return null;
             }
@@ -157,27 +156,63 @@ async function setupIPCHandlers() {
             const decryptedCredentials = encryptionUtils.decryptCredentials(encryptedCredentials);
             return decryptedCredentials;
         } catch (error) {
-            console.error(`Error loading ${credentialType}:`, error);
+            console.error('Error loading credentials:', error);
             // If decryption fails, the data might be corrupted or tampered with
-            throw new Error(`Failed to decrypt ${credentialType} - data may be corrupted`);
+            throw new Error('Failed to decrypt credentials - data may be corrupted');
         }
     });
 
-    // Clear encrypted credentials (supports both API and FTP credentials)
-    ipcMain.handle('clear-credentials', async (event, credentialType) => {
+    // Clear encrypted credentials - FIXED to use proper FTP sync app naming
+    ipcMain.handle('clear-credentials', async (event, credentialsType) => {
         try {
             if (!store) await initializeStore();
             
-            const storeKey = credentialType === 'apiCredentials' ? 'morrisonsEDI_userApiCredentials' : 'morrisonsEDI_userFtpCredentials';
-            store.delete(storeKey);
+            // FIXED: Create proper key based on credentials type for FTP sync app
+            const storageKey = `ftpSyncApp_${credentialsType}`;
+            
+            store.delete(storageKey);
             return { success: true };
         } catch (error) {
-            console.error(`Error clearing ${credentialType}:`, error);
+            console.error('Error clearing credentials:', error);
             throw error;
         }
     });
 
-    // Force window focus (helps with Electron focus issues)
+    // Process file - NEW: Send file to renderer for processing
+    ipcMain.handle('process-file', async (event, fileName, fileContent) => {
+        try {
+            console.log(`📤 Sending file to renderer for processing: ${fileName}`);
+            
+            // Get the sender's webContents (the renderer that will process the file)
+            const webContents = event.sender;
+            
+            // Send file to renderer for processing
+            webContents.send('process-file', fileName, fileContent);
+            
+            return { success: true, message: 'File sent to renderer for processing' };
+        } catch (error) {
+            console.error('Error sending file to renderer:', error);
+            throw error;
+        }
+    });
+
+    // Notify processing complete - NEW: Receive processing results from renderer
+    ipcMain.handle('notify-processing-complete', async (event, fileName, result) => {
+        try {
+            if (result.success) {
+                console.log(`✅ File processed successfully: ${fileName}`, result.orderData);
+            } else {
+                console.error(`❌ File processing failed: ${fileName}`, result.error);
+            }
+            
+            return { success: true };
+        } catch (error) {
+            console.error('Error handling processing notification:', error);
+            throw error;
+        }
+    });
+
+    // Force window focus (FIXED - gentler focus approach)
     ipcMain.handle('focus-window', async (event) => {
         try {
             // Try to get window from the event sender
@@ -197,23 +232,33 @@ async function setupIPCHandlers() {
             }
             
             if (win) {
-                // Multi-step focus approach for different platforms
-                win.show();
-                win.focus();
+                // Check if window is minimized and restore if needed
+                if (win.isMinimized()) {
+                    win.restore();
+                }
                 
-                // Additional focus tricks for stubborn platforms
+                // Only use gentle focus methods that don't affect window positioning
                 if (process.platform === 'win32') {
-                    // Windows-specific focus handling
-                    win.setAlwaysOnTop(true);
-                    win.setAlwaysOnTop(false);
+                    // For Windows: Use gentler focus approach that preserves snapped state
+                    // Only focus on the web view content, don't manipulate window state
                     win.focusOnWebView();
+                    
+                    // If the window still doesn't have focus, try the standard focus method
+                    if (!win.isFocused()) {
+                        win.focus();
+                    }
                 } else if (process.platform === 'darwin') {
                     // macOS-specific focus handling
                     app.focus({ steal: true });
+                    win.focus();
                 } else {
-                    // Linux-specific focus handling
-                    win.setAlwaysOnTop(true);
-                    win.setAlwaysOnTop(false);
+                    // Linux and other platforms - use standard focus
+                    win.focus();
+                }
+                
+                // Ensure the window is visible without changing its position/size
+                if (!win.isVisible()) {
+                    win.show();
                 }
             }
             
@@ -223,142 +268,60 @@ async function setupIPCHandlers() {
             return { success: false, error: error.message };
         }
     });
-    
-    // SFTP Sync Operations
-    
-    // Test SFTP sync (single run)
-    ipcMain.handle('test-sync', async (event, config) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            const result = await sftpManager.syncFiles(
-                config.credentials,
-                config.remotePath
-            );
-            
-            return { 
-                success: true, 
-                processedCount: result.processedCount,
-                errorCount: result.errorCount,
-                totalFiles: result.totalFiles,
-                newFiles: result.newFiles,
-                deletedCount: result.deletedCount,
-                deletionErrors: result.deletionErrors,
-                skippedCount: result.skippedCount,
-                debugDeleteFiles: result.debugDeleteFiles,
-                debugSkipProcessed: result.debugSkipProcessed
-            };
-        } catch (error) {
-            console.error('Test sync failed:', error);
-            return { success: false, error: error.message };
-        }
-    });
 
-    // Start automatic SFTP sync
-    ipcMain.handle('start-auto-sync', async (event, config) => {
+    // Sync control handlers
+    ipcMain.handle('start-auto-sync', async (event, minutes) => {
         try {
-            if (!sftpManager) await initializeStore();
-            
-            await sftpManager.startAutoSync(
-                config.credentials,
-                config.remotePath,
-                config.intervalMinutes
-            );
-            
-            return { success: true };
-        } catch (error) {
-            console.error('Failed to start auto sync:', error);
-            return { success: false, error: error.message };
-        }
-    });
-
-    // Stop automatic SFTP sync
-    ipcMain.handle('stop-auto-sync', async (event) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            await sftpManager.stopAutoSync();
-            return { success: true };
-        } catch (error) {
-            console.error('Failed to stop auto sync:', error);
-            return { success: false, error: error.message };
-        }
-    });
-
-    // Get SFTP sync status
-    ipcMain.handle('get-sync-status', async (event) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            return sftpManager.getStatus();
-        } catch (error) {
-            console.error('Error getting sync status:', error);
-            return { isRunning: false, isConnected: false, error: error.message };
-        }
-    });
-
-    // Clear processed files list
-    ipcMain.handle('clear-processed-files', async (event) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            await sftpManager.clearProcessedFiles();
-            return { success: true };
-        } catch (error) {
-            console.error('Error clearing processed files:', error);
-            return { success: false, error: error.message };
-        }
-    });
-
-    // Get processed files list
-    ipcMain.handle('get-processed-files', async (event) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            const files = sftpManager.getProcessedFiles();
-            return { success: true, files };
-        } catch (error) {
-            console.error('Error getting processed files:', error);
-            return { success: false, error: error.message };
-        }
-    });
-
-    // NEW: Manually delete a specific file from remote server
-    ipcMain.handle('delete-remote-file', async (event, config) => {
-        try {
-            if (!sftpManager) await initializeStore();
-            
-            const result = await sftpManager.manuallyDeleteFile(
-                config.credentials,
-                config.remotePath,
-                config.fileName
-            );
-            
+            const { syncController } = require('./sync-controller');
+            const result = await syncController.startAutoSync(minutes, false);
             return result;
         } catch (error) {
-            console.error('Failed to delete remote file:', error);
+            console.error('Error starting auto-sync via IPC:', error);
             return { success: false, error: error.message };
         }
     });
 
-    // NEW: Clean up orphaned files (files that exist remotely but are marked as processed)
-    ipcMain.handle('cleanup-orphaned-files', async (event, config) => {
+    ipcMain.handle('stop-auto-sync', async (event) => {
         try {
-            if (!sftpManager) await initializeStore();
-            
-            const result = await sftpManager.cleanupOrphanedFiles(
-                config.credentials,
-                config.remotePath
-            );
-            
-            return { 
-                success: true, 
-                deletedCount: result.deletedCount,
-                errorCount: result.errorCount,
-                totalOrphaned: result.totalOrphaned
-            };
+            const { syncController } = require('./sync-controller');
+            const result = syncController.stopAutoSync();
+            return result;
         } catch (error) {
-            console.error('Failed to cleanup orphaned files:', error);
+            console.error('Error stopping auto-sync via IPC:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('manual-sync', async (event) => {
+        try {
+            const { syncController } = require('./sync-controller');
+            const result = await syncController.manualSync();
+            return result;
+        } catch (error) {
+            console.error('Error running manual sync via IPC:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('get-sync-status', async (event) => {
+        try {
+            const { syncController } = require('./sync-controller');
+            const status = syncController.getStatus();
+            return { success: true, status };
+        } catch (error) {
+            console.error('Error getting sync status via IPC:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Change auto-sync interval without interrupting current sync
+    ipcMain.handle('change-auto-sync-interval', async (event, minutes) => {
+        try {
+            const { syncController } = require('./sync-controller');
+            const result = await syncController.changeAutoSyncInterval(minutes);
+            return result;
+        } catch (error) {
+            console.error('Error changing auto-sync interval via IPC:', error);
             return { success: false, error: error.message };
         }
     });

@@ -1,194 +1,5 @@
-// Enhanced Credentials Handler for API and FTP credentials
-// Credentials stored permanently until manually cleared - no expiration
-
-class SecureCredentialsManager {
-    constructor() {
-        this.credentials = new Map();
-        this.accessLog = new Map();
-        this.isLocked = false;
-        
-        this.bindCleanupEvents();
-    }
-
-    store(key, value, options = {}) {
-        if (this.isLocked) {
-            throw new Error('Credentials manager is locked');
-        }
-
-        const secureValue = {
-            data: value,
-            created: Date.now(),
-            lastAccessed: Date.now(),
-            accessCount: 0,
-            sensitive: options.sensitive !== false
-        };
-
-        this.credentials.set(key, secureValue);
-        this.accessLog.set(key, []);
-    }
-
-    get(key) {
-        if (this.isLocked) {
-            throw new Error('Credentials manager is locked');
-        }
-
-        const wrapper = this.credentials.get(key);
-        if (!wrapper) {
-            return null;
-        }
-
-        wrapper.lastAccessed = Date.now();
-        wrapper.accessCount++;
-        
-        const log = this.accessLog.get(key) || [];
-        log.push({ timestamp: Date.now(), action: 'access' });
-        if (log.length > 10) {
-            log.shift();
-        }
-        this.accessLog.set(key, log);
-
-        return wrapper.data;
-    }
-
-    has(key) {
-        return this.credentials.has(key);
-    }
-
-    remove(key) {
-        const wrapper = this.credentials.get(key);
-        if (!wrapper) return false;
-
-        if (wrapper.sensitive && typeof wrapper.data === 'object') {
-            this.overwriteObject(wrapper.data);
-        } else if (wrapper.sensitive && typeof wrapper.data === 'string') {
-            wrapper.data = this.generateOverwriteString(wrapper.data.length);
-        }
-
-        this.credentials.delete(key);
-        this.accessLog.delete(key);
-        
-        return true;
-    }
-
-    getStatus(key) {
-        const wrapper = this.credentials.get(key);
-        if (!wrapper) {
-            return { exists: false };
-        }
-
-        const now = Date.now();
-        const age = now - wrapper.created;
-        const timeSinceAccess = now - wrapper.lastAccessed;
-
-        return {
-            exists: true,
-            age: age,
-            lastAccessed: timeSinceAccess,
-            accessCount: wrapper.accessCount,
-            isExpired: false,
-            isIdle: false,
-            expiresIn: null
-        };
-    }
-
-    lock(reason = 'Manual lock') {
-        this.isLocked = true;
-        this.clearAll(true);
-    }
-
-    unlock(reason = 'Manual unlock') {
-        this.isLocked = false;
-    }
-
-    clearAll(force = false) {
-        if (this.isLocked && !force) {
-            throw new Error('Cannot clear credentials: manager is locked');
-        }
-        
-        for (const [key, wrapper] of this.credentials) {
-            if (wrapper.sensitive && typeof wrapper.data === 'object') {
-                this.overwriteObject(wrapper.data);
-            } else if (wrapper.sensitive && typeof wrapper.data === 'string') {
-                wrapper.data = this.generateOverwriteString(wrapper.data.length);
-            }
-        }
-
-        this.credentials.clear();
-        this.accessLog.clear();
-        
-        if (global.gc) {
-            global.gc();
-        }
-    }
-
-    overwriteObject(obj) {
-        if (!obj || typeof obj !== 'object') return;
-        
-        for (const key in obj) {
-            if (obj.hasOwnProperty(key)) {
-                if (typeof obj[key] === 'string') {
-                    obj[key] = this.generateOverwriteString(obj[key].length);
-                } else if (typeof obj[key] === 'object') {
-                    this.overwriteObject(obj[key]);
-                } else {
-                    obj[key] = null;
-                }
-            }
-        }
-    }
-
-    generateOverwriteString(length) {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
-        let result = '';
-        for (let i = 0; i < length; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
-    }
-
-    bindCleanupEvents() {
-        const cleanup = () => {
-            this.clearAll(true);
-        };
-
-        if (typeof process !== 'undefined') {
-            process.on('exit', cleanup);
-            process.on('SIGINT', cleanup);
-            process.on('SIGTERM', cleanup);
-            process.on('uncaughtException', (err) => {
-                cleanup();
-            });
-        }
-
-        if (typeof window !== 'undefined') {
-            window.addEventListener('beforeunload', cleanup);
-        }
-    }
-
-    getStatistics() {
-        const stats = {
-            totalCredentials: this.credentials.size,
-            locked: this.isLocked,
-            credentials: {}
-        };
-
-        for (const [key, wrapper] of this.credentials) {
-            const now = Date.now();
-            stats.credentials[key] = {
-                age: now - wrapper.created,
-                lastAccessed: now - wrapper.lastAccessed,
-                accessCount: wrapper.accessCount,
-                sensitive: wrapper.sensitive
-            };
-        }
-
-        return stats;
-    }
-
-    destroy() {
-        this.clearAll(true);
-    }
-}
+// Simple Credentials Handler - NO LEGACY BULLSHIT
+// Just save and load credentials with hardcoded names
 
 class CredentialsHandler {
     constructor() {
@@ -214,47 +25,207 @@ class CredentialsHandler {
         this.ftpStatusIndicator = document.getElementById('ftpStatusIndicator');
         this.ftpStatusText = document.getElementById('ftpStatusText');
         
-        // Initialize secure credentials manager
-        this.secureManager = new SecureCredentialsManager();
-        this.failureCount = 0;
-        
-        // Create secure proxies for global credentials access
-        window.appCredentials = new Proxy({}, {
-            get: (target, prop) => {
-                if (prop === 'isLoaded') {
-                    return this.secureManager.has('apiCredentials');
-                }
-                
-                const creds = this.secureManager.get('apiCredentials');
-                return creds ? creds[prop] : null;
-            },
-            
-            set: (target, prop, value) => {
-                return false;
-            }
-        });
-        
-        window.ftpCredentials = new Proxy({}, {
-            get: (target, prop) => {
-                if (prop === 'isLoaded') {
-                    return this.secureManager.has('ftpCredentials');
-                }
-                
-                const creds = this.secureManager.get('ftpCredentials');
-                return creds ? creds[prop] : null;
-            },
-            
-            set: (target, prop, value) => {
-                return false;
-            }
-        });
+        // INITIALIZE GLOBAL CREDENTIALS OBJECT
+        this.initializeGlobalCredentials();
         
         this.init();
+    }
+
+    /**
+     * Initialize global credentials object that other modules can access
+     */
+    initializeGlobalCredentials() {
+        window.appCredentials = {
+            isLoaded: false,
+            accountKey: null,
+            clientId: null,
+            secretKey: null
+        };
+        console.log('🔧 INIT: Global credentials object initialized');
+    }
+
+    /**
+     * Update global credentials object whenever credentials change
+     */
+    updateGlobalCredentials(credentials) {
+        if (credentials && credentials.accountKey && credentials.clientId && credentials.secretKey) {
+            window.appCredentials = {
+                isLoaded: true,
+                accountKey: credentials.accountKey,
+                clientId: credentials.clientId,
+                secretKey: credentials.secretKey
+            };
+            console.log('✅ GLOBAL: API credentials loaded into global object');
+        } else {
+            window.appCredentials = {
+                isLoaded: false,
+                accountKey: null,
+                clientId: null,
+                secretKey: null
+            };
+            console.log('🗑️ GLOBAL: API credentials cleared from global object');
+        }
     }
 
     init() {
         this.setupEventListeners();
         this.loadCredentialsOnStartup();
+    }
+
+    /**
+     * SIMPLE: Save API credentials
+     */
+    async saveApiCredentialsToStorage(credentials) {
+        try {
+            const credentialsWithTimestamp = {
+                ...credentials,
+                timestamp: new Date().toISOString()
+            };
+
+            if (window.electronAPI && window.electronAPI.saveCredentials) {
+                await window.electronAPI.saveCredentials('apiCredentials', credentialsWithTimestamp);
+            } else {
+                const encoded = btoa(JSON.stringify(credentialsWithTimestamp));
+                localStorage.setItem('ftpSyncApp_apiCredentials', encoded);
+            }
+            
+            console.log('✅ API credentials saved');
+            
+            // UPDATE GLOBAL CREDENTIALS IMMEDIATELY
+            this.updateGlobalCredentials(credentials);
+            
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Error saving API credentials:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * SIMPLE: Load API credentials
+     */
+    async loadApiCredentials() {
+        try {
+            let credentials = null;
+            
+            if (window.electronAPI && window.electronAPI.loadCredentials) {
+                credentials = await window.electronAPI.loadCredentials('apiCredentials');
+            } else {
+                const stored = localStorage.getItem('ftpSyncApp_apiCredentials');
+                if (stored) {
+                    credentials = JSON.parse(atob(stored));
+                }
+            }
+            
+            if (credentials) {
+                console.log('✅ API credentials loaded');
+                // UPDATE GLOBAL CREDENTIALS IMMEDIATELY
+                this.updateGlobalCredentials(credentials);
+            } else {
+                console.log('❌ No API credentials found');
+                this.updateGlobalCredentials(null);
+            }
+            
+            return credentials;
+        } catch (error) {
+            console.error('❌ Error loading API credentials:', error);
+            this.updateGlobalCredentials(null);
+            return null;
+        }
+    }
+
+    /**
+     * SIMPLE: Clear API credentials
+     */
+    async clearApiCredentialsFromStorage() {
+        try {
+            if (window.electronAPI && window.electronAPI.clearCredentials) {
+                await window.electronAPI.clearCredentials('apiCredentials');
+            } else {
+                localStorage.removeItem('ftpSyncApp_apiCredentials');
+            }
+            
+            console.log('🗑️ API credentials cleared');
+            
+            // CLEAR GLOBAL CREDENTIALS IMMEDIATELY
+            this.updateGlobalCredentials(null);
+            
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Error clearing API credentials:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * SIMPLE: Save FTP credentials
+     */
+    async saveFtpCredentialsToStorage(credentials) {
+        try {
+            const credentialsWithTimestamp = {
+                ...credentials,
+                timestamp: new Date().toISOString()
+            };
+
+            if (window.electronAPI && window.electronAPI.saveCredentials) {
+                await window.electronAPI.saveCredentials('ftpCredentials', credentialsWithTimestamp);
+            } else {
+                const encoded = btoa(JSON.stringify(credentialsWithTimestamp));
+                localStorage.setItem('ftpSyncApp_ftpCredentials', encoded);
+            }
+            
+            console.log('✅ FTP credentials saved');
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Error saving FTP credentials:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * SIMPLE: Load FTP credentials
+     */
+    async loadFtpCredentials() {
+        try {
+            let credentials = null;
+            
+            if (window.electronAPI && window.electronAPI.loadCredentials) {
+                credentials = await window.electronAPI.loadCredentials('ftpCredentials');
+            } else {
+                const stored = localStorage.getItem('ftpSyncApp_ftpCredentials');
+                if (stored) {
+                    credentials = JSON.parse(atob(stored));
+                }
+            }
+            
+            if (credentials) {
+                console.log('✅ FTP credentials loaded');
+            }
+            
+            return credentials;
+        } catch (error) {
+            console.error('❌ Error loading FTP credentials:', error);
+            return null;
+        }
+    }
+
+    /**
+     * SIMPLE: Clear FTP credentials
+     */
+    async clearFtpCredentialsFromStorage() {
+        try {
+            if (window.electronAPI && window.electronAPI.clearCredentials) {
+                await window.electronAPI.clearCredentials('ftpCredentials');
+            } else {
+                localStorage.removeItem('ftpSyncApp_ftpCredentials');
+            }
+            
+            console.log('🗑️ FTP credentials cleared');
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Error clearing FTP credentials:', error);
+            throw error;
+        }
     }
 
     setupEventListeners() {
@@ -314,37 +285,23 @@ class CredentialsHandler {
     }
 
     async openApiModal() {
-        if (this.secureManager.isLocked) {
-            this.showNotification('Credentials are locked. Please restart the application.', 'error');
-            return;
-        }
-
         this.apiCredentialsModal.classList.add('show');
         
         setTimeout(() => {
             this.recreateApiInputs();
         }, 50);
         
-        this.loadApiCredentialsToForm().catch(error => {
-            console.error('Error loading API credentials to form:', error);
-        });
+        await this.loadApiCredentialsToForm();
     }
 
     async openFtpModal() {
-        if (this.secureManager.isLocked) {
-            this.showNotification('Credentials are locked. Please restart the application.', 'error');
-            return;
-        }
-
         this.ftpCredentialsModal.classList.add('show');
         
         setTimeout(() => {
             this.recreateFtpInputs();
         }, 50);
         
-        this.loadFtpCredentialsToForm().catch(error => {
-            console.error('Error loading FTP credentials to form:', error);
-        });
+        await this.loadFtpCredentialsToForm();
     }
 
     recreateApiInputs() {
@@ -362,10 +319,6 @@ class CredentialsHandler {
             const passwordInput = document.getElementById('apiSecretKey');
             passwordInput.type = e.target.checked ? 'text' : 'password';
         });
-        
-        this.addInputHandlers('apiClientId');
-        this.addInputHandlers('apiSecretKey');
-        this.addInputHandlers('apiAccountKey');
         
         setTimeout(() => {
             document.getElementById('apiClientId').focus();
@@ -395,12 +348,6 @@ class CredentialsHandler {
             passwordInput.type = e.target.checked ? 'text' : 'password';
         });
         
-        this.addInputHandlers('ftpHost');
-        this.addInputHandlers('ftpPort');
-        this.addInputHandlers('ftpUsername');
-        this.addInputHandlers('ftpPassword');
-        this.addInputHandlers('ftpDirectory');
-        
         setTimeout(() => {
             document.getElementById('ftpHost').focus();
         }, 10);
@@ -412,64 +359,6 @@ class CredentialsHandler {
         newInput.value = value;
         if (type) newInput.type = type;
         oldInput.parentNode.replaceChild(newInput, oldInput);
-    }
-
-    addInputHandlers(inputId) {
-        const input = document.getElementById(inputId);
-        
-        input.addEventListener('keydown', (e) => {
-            if (e.key && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-                e.preventDefault();
-                
-                const start = input.selectionStart;
-                const end = input.selectionEnd;
-                const currentValue = input.value;
-                
-                const newValue = currentValue.substring(0, start) + e.key + currentValue.substring(end);
-                input.value = newValue;
-                
-                input.setSelectionRange(start + 1, start + 1);
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            else if (e.key === 'Backspace') {
-                e.preventDefault();
-                
-                const start = input.selectionStart;
-                const end = input.selectionEnd;
-                const currentValue = input.value;
-                
-                if (start === end && start > 0) {
-                    const newValue = currentValue.substring(0, start - 1) + currentValue.substring(end);
-                    input.value = newValue;
-                    input.setSelectionRange(start - 1, start - 1);
-                } else if (start !== end) {
-                    const newValue = currentValue.substring(0, start) + currentValue.substring(end);
-                    input.value = newValue;
-                    input.setSelectionRange(start, start);
-                }
-                
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            else if (e.key === 'Delete') {
-                e.preventDefault();
-                
-                const start = input.selectionStart;
-                const end = input.selectionEnd;
-                const currentValue = input.value;
-                
-                if (start === end && start < currentValue.length) {
-                    const newValue = currentValue.substring(0, start) + currentValue.substring(end + 1);
-                    input.value = newValue;
-                    input.setSelectionRange(start, start);
-                } else if (start !== end) {
-                    const newValue = currentValue.substring(0, start) + currentValue.substring(end);
-                    input.value = newValue;
-                    input.setSelectionRange(start, start);
-                }
-                
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        });
     }
 
     closeApiModalHandler() {
@@ -488,7 +377,7 @@ class CredentialsHandler {
 
     async loadApiCredentialsToForm() {
         try {
-            const credentials = await this.getDecryptedCredentials('apiCredentials');
+            const credentials = await this.loadApiCredentials();
             
             if (credentials) {
                 document.getElementById('apiClientId').value = credentials.clientId || '';
@@ -502,7 +391,7 @@ class CredentialsHandler {
 
     async loadFtpCredentialsToForm() {
         try {
-            const credentials = await this.getDecryptedCredentials('ftpCredentials');
+            const credentials = await this.loadFtpCredentials();
             
             if (credentials) {
                 document.getElementById('ftpHost').value = credentials.host || '';
@@ -522,143 +411,63 @@ class CredentialsHandler {
         const secretKey = document.getElementById('apiSecretKey').value;
         const accountKey = document.getElementById('apiAccountKey').value.trim();
 
-        if (!this.validateApiCredentialFormat(clientId, secretKey, accountKey)) {
-            return;
-        }
-
         try {
-            await this.saveEncryptedCredentials('apiCredentials', {
+            const credentials = {
                 clientId: clientId,
                 secretKey: secretKey,
                 accountKey: accountKey
-            });
+            };
             
-            this.secureManager.store('apiCredentials', {
-                clientId: clientId,
-                secretKey: secretKey,
-                accountKey: accountKey
-            }, {
-                sensitive: true
-            });
+            await this.saveApiCredentialsToStorage(credentials);
             
             this.updateApiCredentialsStatus(true);
             this.closeApiModalHandler();
-            this.showNotification('API credentials saved permanently!', 'success');
-            this.failureCount = 0;
+            this.showNotification('API credentials saved!', 'success');
+            
+            // ENSURE GLOBAL CREDENTIALS ARE SET BEFORE INITIALIZING API
+            console.log('🔧 SAVE: Ensuring global credentials are set...');
+            console.log('🔧 SAVE: window.appCredentials:', window.appCredentials);
+            
+            await this.initializeStoklyAPI();
             
         } catch (error) {
             console.error('Error saving API credentials:', error);
             this.showNotification('Error saving API credentials', 'error');
-            this.failureCount++;
         }
     }
 
     async handleSaveFtpCredentials() {
         const host = document.getElementById('ftpHost').value.trim();
-        const port = parseInt(document.getElementById('ftpPort').value) || 22;
+        const port = document.getElementById('ftpPort').value.trim();
         const username = document.getElementById('ftpUsername').value.trim();
         const password = document.getElementById('ftpPassword').value;
         const directory = document.getElementById('ftpDirectory').value.trim();
         const secure = document.getElementById('ftpSecure').checked;
 
-        if (!this.validateFtpCredentialFormat(host, port, username, password)) {
-            return;
-        }
-
         try {
-            // Use the EXACT same method as API credentials
-            await this.saveEncryptedCredentials('ftpCredentials', {
+            await this.saveFtpCredentialsToStorage({
                 host: host,
                 port: port,
                 username: username,
                 password: password,
                 directory: directory,
                 secure: secure
-            });
-            
-            // Store in memory using the EXACT same method as API credentials  
-            this.secureManager.store('ftpCredentials', {
-                host: host,
-                port: port,
-                username: username,
-                password: password,
-                directory: directory,
-                secure: secure
-            }, {
-                sensitive: true
             });
             
             this.updateFtpCredentialsStatus(true);
             this.closeFtpModalHandler();
-            this.showNotification('FTP credentials saved permanently!', 'success');
-            this.failureCount = 0;
+            this.showNotification('FTP credentials saved!', 'success');
             
         } catch (error) {
             console.error('Error saving FTP credentials:', error);
             this.showNotification('Error saving FTP credentials', 'error');
-            this.failureCount++;
         }
-    }
-
-    validateApiCredentialFormat(clientId, secretKey, accountKey) {
-        const errors = [];
-        
-        if (!clientId || clientId.length < 8) {
-            errors.push('Client ID must be at least 8 characters');
-        }
-        
-        if (!secretKey || secretKey.length < 16) {
-            errors.push('Secret Key must be at least 16 characters');
-        }
-        
-        if (!accountKey || accountKey.length < 8) {
-            errors.push('Account Key must be at least 8 characters');
-        }
-        
-        if (secretKey && (secretKey.toLowerCase().includes('password') || secretKey.includes('123456'))) {
-            errors.push('Secret Key appears to be weak');
-        }
-        
-        if (errors.length > 0) {
-            this.showNotification(errors.join('; '), 'error');
-            return false;
-        }
-        
-        return true;
-    }
-
-    validateFtpCredentialFormat(host, port, username, password) {
-        const errors = [];
-        
-        if (!host || host.length < 3) {
-            errors.push('FTP Host must be at least 3 characters');
-        }
-        
-        if (!port || port < 1 || port > 65535) {
-            errors.push('Port must be between 1 and 65535');
-        }
-        
-        if (!username || username.length < 1) {
-            errors.push('Username is required');
-        }
-        
-        if (!password || password.length < 1) {
-            errors.push('Password is required');
-        }
-        
-        if (errors.length > 0) {
-            this.showNotification(errors.join('; '), 'error');
-            return false;
-        }
-        
-        return true;
     }
 
     async handleClearApiCredentials() {
         if (confirm('Are you sure you want to clear stored API credentials?')) {
             try {
-                await this.clearStoredCredentials('apiCredentials');
-                this.secureManager.remove('apiCredentials');
+                await this.clearApiCredentialsFromStorage();
                 
                 document.getElementById('apiClientId').value = '';
                 document.getElementById('apiSecretKey').value = '';
@@ -666,7 +475,7 @@ class CredentialsHandler {
                 
                 this.updateApiCredentialsStatus(false);
                 this.closeApiModalHandler();
-                this.showNotification('API credentials cleared successfully!', 'success');
+                this.showNotification('API credentials cleared!', 'success');
                 
             } catch (error) {
                 console.error('Error clearing API credentials:', error);
@@ -678,8 +487,7 @@ class CredentialsHandler {
     async handleClearFtpCredentials() {
         if (confirm('Are you sure you want to clear stored FTP credentials?')) {
             try {
-                await this.clearStoredCredentials('ftpCredentials');
-                this.secureManager.remove('ftpCredentials');
+                await this.clearFtpCredentialsFromStorage();
                 
                 document.getElementById('ftpHost').value = '';
                 document.getElementById('ftpPort').value = '22';
@@ -690,7 +498,7 @@ class CredentialsHandler {
                 
                 this.updateFtpCredentialsStatus(false);
                 this.closeFtpModalHandler();
-                this.showNotification('FTP credentials cleared successfully!', 'success');
+                this.showNotification('FTP credentials cleared!', 'success');
                 
             } catch (error) {
                 console.error('Error clearing FTP credentials:', error);
@@ -699,106 +507,78 @@ class CredentialsHandler {
         }
     }
 
-    async saveEncryptedCredentials(type, credentials) {
-        const credentialsWithTimestamp = {
-            ...credentials,
-            timestamp: new Date().toISOString()
-        };
-
-        if (window.electronAPI && window.electronAPI.saveCredentials) {
-            await window.electronAPI.saveCredentials(`${type}`, credentialsWithTimestamp);
-        } else {
-            const encoded = btoa(JSON.stringify(credentialsWithTimestamp));
-            localStorage.setItem(`morrisonsEDI_${type.charAt(0).toUpperCase() + type.slice(1)}`, encoded);
-        }
-    }
-
-    async getDecryptedCredentials(type) {
-        try {
-            let credentials = null;
-            
-            if (window.electronAPI && window.electronAPI.loadCredentials) {
-                credentials = await window.electronAPI.loadCredentials(`${type}`);
-            } else {
-                const stored = localStorage.getItem(`morrisonsEDI_${type.charAt(0).toUpperCase() + type.slice(1)}`);
-                if (stored) {
-                    credentials = JSON.parse(atob(stored));
-                }
-            }
-            
-            return credentials;
-        } catch (error) {
-            console.error(`Error getting decrypted ${type} credentials:`, error);
-            return null;
-        }
-    }
-
-    async clearStoredCredentials(type) {
-        if (window.electronAPI && window.electronAPI.clearCredentials) {
-            await window.electronAPI.clearCredentials(`${type}`);
-        } else {
-            localStorage.removeItem(`morrisonsEDI_${type.charAt(0).toUpperCase() + type.slice(1)}`);
-        }
-    }
-
     async loadCredentialsOnStartup() {
         try {
-            // Load API credentials
-            console.log('Loading API credentials...');
-            const apiCredentials = await this.getDecryptedCredentials('apiCredentials');
-            console.log('API credentials loaded:', apiCredentials ? 'Yes' : 'No');
+            console.log('🔧 STARTUP: Loading credentials on startup...');
+            
+            // Check API credentials
+            const apiCredentials = await this.loadApiCredentials();
+            this.updateApiCredentialsStatus(!!apiCredentials);
             
             if (apiCredentials && apiCredentials.clientId && apiCredentials.secretKey && apiCredentials.accountKey) {
-                this.secureManager.store('apiCredentials', {
-                    clientId: apiCredentials.clientId,
-                    secretKey: apiCredentials.secretKey,
-                    accountKey: apiCredentials.accountKey
-                }, {
-                    sensitive: true
-                });
-                this.updateApiCredentialsStatus(true);
+                console.log('🔧 STARTUP: Valid API credentials found, initializing API...');
+                await this.initializeStoklyAPI();
             } else {
-                this.updateApiCredentialsStatus(false);
+                console.log('🔧 STARTUP: No valid API credentials found');
             }
 
-            // Load FTP credentials  
-            console.log('Loading FTP credentials...');
-            const ftpCredentials = await this.getDecryptedCredentials('ftpCredentials');
-            console.log('FTP credentials loaded:', ftpCredentials ? 'Yes' : 'No');
-            console.log('FTP credentials data:', ftpCredentials);
-            
-            if (ftpCredentials && ftpCredentials.host && ftpCredentials.username && ftpCredentials.password) {
-                this.secureManager.store('ftpCredentials', {
-                    host: ftpCredentials.host,
-                    port: ftpCredentials.port || 22,
-                    username: ftpCredentials.username,
-                    password: ftpCredentials.password,
-                    directory: ftpCredentials.directory || '',
-                    secure: ftpCredentials.secure || false
-                }, {
-                    sensitive: true
-                });
-                this.updateFtpCredentialsStatus(true);
-            } else {
-                this.updateFtpCredentialsStatus(false);
-            }
+            // Check FTP credentials  
+            const ftpCredentials = await this.loadFtpCredentials();
+            this.updateFtpCredentialsStatus(!!ftpCredentials);
 
         } catch (error) {
             console.error('Error loading credentials on startup:', error);
             this.updateApiCredentialsStatus(false);
             this.updateFtpCredentialsStatus(false);
-            this.failureCount++;
-            
-            if (this.failureCount > 3) {
-                this.secureManager.lock('Repeated credential loading failures');
+        }
+    }
+
+    async initializeStoklyAPI() {
+        try {
+            if (!window.stoklyAPI || !window.stoklyAPI.initializeStoklyAPI) {
+                console.log('❌ Stokly API not available');
+                return;
             }
+
+            // CHECK GLOBAL CREDENTIALS FIRST
+            if (!window.appCredentials || !window.appCredentials.isLoaded) {
+                console.log('❌ INIT: Global credentials not loaded, loading from storage...');
+                const credentials = await this.loadApiCredentials();
+                if (!credentials) {
+                    console.log('❌ INIT: No API credentials available');
+                    return;
+                }
+            }
+
+            console.log('🔧 INIT: Initializing Stokly API with global credentials...');
+            console.log('🔧 INIT: Has accountKey:', !!window.appCredentials.accountKey);
+            console.log('🔧 INIT: Has clientId:', !!window.appCredentials.clientId);
+            console.log('🔧 INIT: Has secretKey:', !!window.appCredentials.secretKey);
+            
+            const success = await window.stoklyAPI.initializeStoklyAPI({
+                accountKey: window.appCredentials.accountKey,
+                clientId: window.appCredentials.clientId,
+                secretKey: window.appCredentials.secretKey,
+                environment: 'api.stok.ly'
+            });
+
+            if (success) {
+                console.log('✅ INIT: Stokly API initialized successfully');
+                this.showNotification('API initialized successfully', 'success');
+            } else {
+                console.error('❌ INIT: Failed to initialize Stokly API');
+                this.showNotification('Failed to initialize API', 'error');
+            }
+        } catch (error) {
+            console.error('❌ INIT: Error initializing Stokly API:', error);
+            this.showNotification(`API initialization error: ${error.message}`, 'error');
         }
     }
 
     updateApiCredentialsStatus(hasCredentials) {
-        if (hasCredentials && this.secureManager.has('apiCredentials')) {
+        if (hasCredentials) {
             this.apiStatusIndicator.className = 'status-indicator stored';
-            this.apiStatusText.textContent = 'API credentials stored permanently';
+            this.apiStatusText.textContent = 'API credentials stored';
             this.apiCredentialsBtn.innerHTML = '<span class="btn-icon">🔐</span>Update API Credentials';
         } else {
             this.apiStatusIndicator.className = 'status-indicator empty';
@@ -808,9 +588,9 @@ class CredentialsHandler {
     }
 
     updateFtpCredentialsStatus(hasCredentials) {
-        if (hasCredentials && this.secureManager.has('ftpCredentials')) {
+        if (hasCredentials) {
             this.ftpStatusIndicator.className = 'status-indicator stored';
-            this.ftpStatusText.textContent = 'FTP credentials stored permanently';
+            this.ftpStatusText.textContent = 'FTP credentials stored';
             this.ftpCredentialsBtn.innerHTML = '<span class="btn-icon">📁</span>Update FTP Credentials';
         } else {
             this.ftpStatusIndicator.className = 'status-indicator empty';
@@ -836,36 +616,6 @@ class CredentialsHandler {
                 }, 3000);
             }
         }
-    }
-
-    // Enhanced utility methods for external access
-    getCredentialStatus(type) {
-        return this.secureManager.getStatus(type);
-    }
-
-    getSecurityStats() {
-        return this.secureManager.getStatistics();
-    }
-
-    // Static utility methods for backward compatibility
-    static getStoredApiCredentials() {
-        return window.appCredentials;
-    }
-
-    static getStoredFtpCredentials() {
-        return window.ftpCredentials;
-    }
-
-    static hasApiCredentials() {
-        return window.appCredentials && window.appCredentials.isLoaded && 
-               window.appCredentials.clientId && window.appCredentials.secretKey && 
-               window.appCredentials.accountKey;
-    }
-
-    static hasFtpCredentials() {
-        return window.ftpCredentials && window.ftpCredentials.isLoaded && 
-               window.ftpCredentials.host && window.ftpCredentials.username && 
-               window.ftpCredentials.password;
     }
 }
 

@@ -19,7 +19,7 @@ class SFTPManager {
         // DEBUG TOGGLES
         this.DEBUG_DELETE_FILES = false;
         this.DEBUG_SKIP_PROCESSED = false;
-        this.DEBUG_USE_LOCAL_FILE = true;  // Set to true to use local file instead of SFTP
+        this.DEBUG_USE_LOCAL_FILE = false;  // Set to true to use local file instead of SFTP
         this.DEBUG_LOCAL_FILE_PATH = './2025-04-07-075001_import.txt';  // Path to local test file
         
         console.log(`🐛 DEBUG MODE: File Deletion = ${this.DEBUG_DELETE_FILES ? 'ENABLED' : 'DISABLED'}`);
@@ -236,10 +236,21 @@ class SFTPManager {
             const fileList = await this.sftp.list(remotePath);
             
             const files = fileList
-                .filter(item => item.type === '-')
+                .filter(item => {
+                    // Only regular files
+                    if (item.type !== '-') return false;
+                    
+                    // Skip 0kb files - NOTHING happens to them
+                    if (item.size === 0) {
+                        console.log(`⏭️ SKIP: ${item.name} (0kb file - ignored completely)`);
+                        return false;
+                    }
+                    
+                    return true;
+                })
                 .map(item => item.name);
             
-            console.log(`✅ LIST: Found ${files.length} files`);
+            console.log(`✅ LIST: Found ${files.length} non-empty files`);
             if (files.length > 0) {
                 console.log(`📂 LIST: Files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
             }
@@ -264,7 +275,10 @@ class SFTPManager {
             const fileContent = await this.sftp.get(remoteFilePath);
             const textContent = fileContent.toString('utf8');
             
-            await this.processFileContent(fileName, textContent);
+            // Just log basic info - don't process here
+            console.log(`📄 PROCESSING: ${fileName} (${textContent.length} chars)`);
+            console.log(`Preview: ${textContent.substring(0, 100)}${textContent.length > 100 ? '...' : ''}`);
+            console.log(`📄 END: ${fileName}`);
             
             // DEBUG: Conditionally delete
             if (this.DEBUG_DELETE_FILES) {
@@ -280,36 +294,11 @@ class SFTPManager {
             
             this.processedFiles.add(fileName);
             console.log(`✅ DOWNLOAD: Successfully processed: ${fileName}`);
-            return true;
+            return { fileName, content: textContent };
             
         } catch (error) {
             console.error(`❌ DOWNLOAD: Failed to process ${fileName}:`, error.message);
             throw error;
-        }
-    }
-
-    async processFileContent(fileName, content) {
-        console.log(`\n📄 PROCESSING: ${fileName} (${content.length} chars)`);
-        console.log(`Preview: ${content.substring(0, 150)}${content.length > 150 ? '...' : ''}`);
-        
-        // Import and call the order processor
-        try {
-            const { processAmscanFile } = require('./amscan-order-parser');
-            processAmscanFile(fileName, content);
-        } catch (error) {
-            console.error(`❌ Error processing file ${fileName}:`, error.message);
-        }
-        
-        console.log(`📄 END: ${fileName}\n`);
-        
-        if (typeof window !== 'undefined' && window.sidebarManager) {
-            window.sidebarManager.addResult({
-                type: 'file_processed',
-                fileName: fileName,
-                timestamp: new Date().toISOString(),
-                contentLength: content.length,
-                preview: content.substring(0, 100) + (content.length > 100 ? '...' : '')
-            });
         }
     }
 
@@ -345,10 +334,12 @@ class SFTPManager {
             let processedCount = 0;
             let errorCount = 0;
             let deletedCount = 0;
+            const downloadedFiles = [];
 
             for (const fileName of filesToProcess) {
                 try {
-                    await this.downloadAndProcessFile(remotePath, fileName);
+                    const fileData = await this.downloadAndProcessFile(remotePath, fileName);
+                    downloadedFiles.push(fileData);
                     processedCount++;
                     if (this.DEBUG_DELETE_FILES) {
                         deletedCount++;
@@ -374,7 +365,8 @@ class SFTPManager {
                 skippedCount,
                 newFiles: filesToProcess.length,
                 debugDeleteFiles: this.DEBUG_DELETE_FILES,
-                debugSkipProcessed: this.DEBUG_SKIP_PROCESSED
+                debugSkipProcessed: this.DEBUG_SKIP_PROCESSED,
+                files: downloadedFiles
             };
 
         } catch (error) {
@@ -495,9 +487,6 @@ class SFTPManager {
             
             console.log(`🐛 DEBUG: Successfully read ${fileName} (${fileContent.length} chars)`);
             
-            // Process the file content
-            await this.processFileContent(fileName, fileContent);
-            
             // Mark as processed
             this.processedFiles.add(fileName);
             await this.saveProcessedFiles();
@@ -514,7 +503,8 @@ class SFTPManager {
                 newFiles: 1,
                 debugDeleteFiles: this.DEBUG_DELETE_FILES,
                 debugSkipProcessed: this.DEBUG_SKIP_PROCESSED,
-                debugLocalFile: true
+                debugLocalFile: true,
+                files: [{ fileName, content: fileContent }]
             };
             
         } catch (error) {

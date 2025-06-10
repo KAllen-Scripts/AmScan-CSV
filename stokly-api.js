@@ -1,6 +1,15 @@
 // Browser-compatible version - no require() needed
 // Uses Web Crypto API instead of Node.js crypto
 
+// Only initialize if we're in browser context
+if (typeof window === 'undefined') {
+    // We're in Node.js - don't initialize this file
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {};
+    }
+} else {
+    // Browser context - initialize the API
+
 // Initialize all variables properly
 let accessToken = null;
 let tokenExpirationTime = null;
@@ -193,7 +202,7 @@ async function initializeStoklyAPI(config) {
     }
 }
 
-// Make functions available globally
+// Make functions available globally for browser use
 window.stoklyAPI = {
     initializeStoklyAPI,
     requester,
@@ -201,3 +210,12 @@ window.stoklyAPI = {
     ensureToken,
     getAccessToken
 };
+
+// Also make them available as global functions for backward compatibility
+window.initializeStoklyAPI = initializeStoklyAPI;
+window.requester = requester;
+window.loopThrough = loopThrough;
+window.ensureToken = ensureToken;
+window.getAccessToken = getAccessToken;
+
+} // End of browser context check
