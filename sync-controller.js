@@ -1,20 +1,11 @@
+// FIXED: Sync Controller - Only add to processed files on complete success
 const fs = require('fs').promises;
 const path = require('path');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, ipcMain } = require('electron');
 
-// Import the SFTPManager class
+// Import the SFTPManager class and unified config
 const SFTPManager = require('./sftp-manager');
-
-// Debug configuration
-const DEBUG_CONFIG = {
-    FILE_DELETION: false,           // Set to true to enable file deletion
-    SKIP_PROCESSED_FILES: false,    // Set to true to skip files that have been processed before
-    USE_LOCAL_FILE: false,           // Set to true to use a local file instead of SFTP
-    LOCAL_FILE_PATH: './2025-04-07-075001_import.txt'  // Path to local test file
-};
-
-// Storage for processed files
-let processedFiles = new Set();
+const configManager = require('./config-manager');
 
 class SyncController {
     constructor() {
@@ -23,48 +14,13 @@ class SyncController {
         this.currentAutoSyncMinutes = null;
         this.pendingIntervalChange = null;
         this.pendingImmediateRun = false;
+        this.currentFileData = null; // Store current file data for deletion
         
         // Initialize SFTP manager
         this.sftpManager = new SFTPManager();
         
-        // Load processed files on startup
-        this.loadProcessedFiles();
-        
-        // Set up debug messages
-        this.logDebugConfig();
-    }
-
-    logDebugConfig() {
-        console.log('🚨 DEBUG MODE: File Deletion =', DEBUG_CONFIG.FILE_DELETION ? 'ENABLED' : 'DISABLED');
-        console.log('🚨 DEBUG MODE: Skip Processed Files =', DEBUG_CONFIG.SKIP_PROCESSED_FILES ? 'ENABLED' : 'DISABLED');
-        console.log('🚨 DEBUG MODE: Use Local File =', DEBUG_CONFIG.USE_LOCAL_FILE ? 'ENABLED' : 'DISABLED');
-        if (DEBUG_CONFIG.USE_LOCAL_FILE) {
-            console.log('🚨 DEBUG MODE: Local File Path =', DEBUG_CONFIG.LOCAL_FILE_PATH);
-        }
-    }
-
-    async loadProcessedFiles() {
-        try {
-            const { getStore } = require('./main-process-handlers');
-            const store = await getStore();
-            const stored = store.get('processedFiles', []);
-            processedFiles = new Set(stored);
-            console.log(`Loaded ${processedFiles.size} previously processed files`);
-        } catch (error) {
-            console.error('Error loading processed files:', error);
-            processedFiles = new Set();
-        }
-    }
-
-    async saveProcessedFiles() {
-        try {
-            const { getStore } = require('./main-process-handlers');
-            const store = await getStore();
-            store.set('processedFiles', Array.from(processedFiles));
-            console.log(`Saved ${processedFiles.size} processed files to storage`);
-        } catch (error) {
-            console.error('Error saving processed files:', error);
-        }
+        console.log('🎛️ SYNC: Initialized with unified configuration system');
+        console.log('✅ FIXED: Files only added to processed list after complete success');
     }
 
     async changeAutoSyncInterval(newMinutes) {
@@ -200,12 +156,13 @@ class SyncController {
 
         this.isRunning = true;
         console.log('🔄 SYNC: Starting sync operation...');
+        console.log('✅ FIXED: Files only added to processed list after complete success');
 
         try {
             let result;
 
-            if (DEBUG_CONFIG.USE_LOCAL_FILE) {
-                console.log('🚨 DEBUG: Using local file instead of SFTP connection');
+            if (configManager.useLocalFile) {
+                console.log('🚨 CONFIG: Using local file instead of SFTP connection');
                 result = await this.processLocalFile();
             } else {
                 result = await this.handleSftpSync();
@@ -213,7 +170,8 @@ class SyncController {
 
             if (result.success) {
                 console.log('✅ SYNC: Sync completed successfully');
-                await this.saveProcessedFiles();
+                // Only save processed files after all processing is complete
+                await configManager.saveProcessedFiles();
                 return result;
             } else {
                 console.error('❌ SYNC: Sync failed:', result.error);
@@ -259,11 +217,16 @@ class SyncController {
                 ftpCredentials.directory || '/'
             );
             
-            // Process any downloaded files
+            // Process any downloaded files with safe deletion
             if (result && result.files) {
+                let deletedCount = 0;
                 for (const fileData of result.files) {
-                    await this.processFile(fileData.fileName, fileData.content);
+                    const processingResult = await this.processFile(fileData.fileName, fileData.content, fileData.remoteFilePath);
+                    if (processingResult.success && processingResult.deleted) {
+                        deletedCount++;
+                    }
                 }
+                result.deletedCount = deletedCount;
             }
             
             console.log('✅ SFTP: SFTP sync completed successfully');
@@ -306,34 +269,48 @@ class SyncController {
 
     async processLocalFile() {
         try {
-            const filePath = DEBUG_CONFIG.LOCAL_FILE_PATH;
-            console.log('🚨 DEBUG: Reading local file:', filePath);
+            const filePath = configManager.localFilePath;
+            console.log('🚨 CONFIG: Reading local file:', filePath);
             
             const fileContent = await fs.readFile(filePath, 'utf8');
             const fileName = path.basename(filePath);
             
-            console.log(`🚨 DEBUG: Successfully read ${fileName} (${fileContent.length} chars)`);
+            console.log(`🚨 CONFIG: Successfully read ${fileName} (${fileContent.length} chars)`);
             
-            await this.processFile(fileName, fileContent);
+            const processingResult = await this.processFile(fileName, fileContent, null);
             
-            console.log('🚨 DEBUG: Local file processing completed');
-            return { success: true, message: 'Local file processed successfully' };
+            if (processingResult.success) {
+                console.log('🚨 CONFIG: Local file processing completed successfully');
+                return { success: true, message: 'Local file processed successfully' };
+            } else {
+                console.log('🚨 CONFIG: Local file processing failed');
+                return { success: false, error: processingResult.error };
+            }
             
         } catch (error) {
-            console.error('🚨 DEBUG: Error processing local file:', error);
+            console.error('🚨 CONFIG: Error processing local file:', error);
             return { success: false, error: error.message };
         }
     }
 
-    async processFile(fileName, fileContent) {
+    async processFile(fileName, fileContent, remoteFilePath = null) {
         try {
-            // Skip 0kb files
+            console.log(`🔒 ZERO-KB PROTECTION: Checking ${fileName}`);
+            console.log(`🔒 Size check: ${fileName} = ${fileContent ? fileContent.length : 'NO CONTENT'} bytes`);
+            
+            // CRITICAL: Absolutely refuse to touch 0kb files
             if (!fileContent || fileContent.length === 0) {
-                console.log(`⏭️ SKIP: ${fileName} (0kb file)`);
-                return { success: true, skipped: true, reason: 'empty' };
+                console.log(`🚫 ZERO-KB PROTECTION TRIGGERED: ${fileName} is 0kb - COMPLETELY IGNORED`);
+                return { success: true, skipped: true, reason: 'zero-kb-protected' };
             }
 
-            if (DEBUG_CONFIG.SKIP_PROCESSED_FILES && processedFiles.has(fileName)) {
+            // EXTRA PROTECTION: Also skip very small files
+            if (fileContent.length < 10) {
+                console.log(`⏭️ SKIP: ${fileName} (too small - ${fileContent.length} chars)`);
+                return { success: true, skipped: true, reason: 'too-small' };
+            }
+
+            if (configManager.skipProcessedFiles && configManager.hasProcessedFile(fileName)) {
                 console.log(`⏭️ SKIP: ${fileName} (already processed)`);
                 return { success: true, skipped: true, reason: 'processed' };
             }
@@ -343,20 +320,46 @@ class SyncController {
             const preview = fileContent.substring(0, 100).replace(/\n/g, ' ');
             console.log(`Preview: ${preview}...`);
 
-            await this.sendFileToRenderer(fileName, fileContent);
-
-            processedFiles.add(fileName);
+            // Send to renderer and wait for processing result
+            const processingResult = await this.sendFileToRendererAndWaitForResult(fileName, fileContent);
             
-            console.log(`📄 END: ${fileName}`);
-            return { success: true };
+            if (processingResult && processingResult.success) {
+                console.log(`✅ PROCESSING SUCCESS: ${fileName} - ready for deletion and marking as processed`);
+                
+                // Now it's safe to delete the file from server
+                let deleted = false;
+                if (remoteFilePath && this.sftpManager) {
+                    // Reconnect if needed for deletion
+                    try {
+                        const ftpCredentials = await this.loadFtpCredentials();
+                        if (ftpCredentials) {
+                            await this.sftpManager.connect(ftpCredentials);
+                            deleted = await this.sftpManager.deleteFileAfterSuccess(remoteFilePath, fileName);
+                            await this.sftpManager.disconnect();
+                        }
+                    } catch (deleteError) {
+                        console.error(`⚠️ DELETE: Error during deletion process for ${fileName}:`, deleteError.message);
+                    }
+                }
+                
+                // ✅ FIXED: ONLY add to processed files AFTER complete success
+                configManager.addProcessedFile(fileName);
+                console.log(`✅ MARKED PROCESSED: ${fileName} added to processed files list after success`);
+                console.log(`📄 COMPLETE: ${fileName}`);
+                return { success: true, deleted };
+            } else {
+                console.log(`❌ PROCESSING FAILED: ${fileName} - file left on server and NOT marked as processed`);
+                return { success: false, error: processingResult?.error || 'Processing failed' };
+            }
 
         } catch (error) {
             console.error(`❌ Error processing file ${fileName}:`, error.message);
+            console.log(`💾 ERROR: ${fileName} left on server and NOT marked as processed due to processing error`);
             return { success: false, error: error.message };
         }
     }
 
-    async sendFileToRenderer(fileName, fileContent) {
+    async sendFileToRendererAndWaitForResult(fileName, fileContent) {
         try {
             const mainWindow = global.mainWindow || BrowserWindow.getAllWindows()[0];
             
@@ -364,15 +367,34 @@ class SyncController {
                 throw new Error('No main window available to send file to renderer');
             }
 
-            mainWindow.webContents.send('process-file', fileName, fileContent);
-            
-            console.log(`📤 Sent ${fileName} to renderer for processing`);
-
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Create a promise that resolves when we get the processing result
+            return new Promise((resolve, reject) => {
+                // Set up a one-time listener for the result
+                const resultHandler = (event, resultFileName, result) => {
+                    if (resultFileName === fileName) {
+                        // Remove the listener
+                        ipcMain.removeListener('notify-processing-complete', resultHandler);
+                        resolve(result);
+                    }
+                };
+                
+                // Listen for the processing result
+                ipcMain.on('notify-processing-complete', resultHandler);
+                
+                // Set a timeout in case renderer doesn't respond
+                setTimeout(() => {
+                    ipcMain.removeListener('notify-processing-complete', resultHandler);
+                    reject(new Error('Timeout waiting for processing result'));
+                }, 30000); // 30 second timeout
+                
+                // Send the file to renderer
+                mainWindow.webContents.send('process-file', fileName, fileContent);
+                console.log(`📤 Sent ${fileName} to renderer, waiting for result...`);
+            });
 
         } catch (error) {
             console.error('Error sending file to renderer:', error);
-            console.log('📄 File processing will continue without renderer processing');
+            throw error;
         }
     }
 
@@ -383,8 +405,8 @@ class SyncController {
             autoSyncMinutes: this.currentAutoSyncMinutes,
             pendingIntervalChange: this.pendingIntervalChange,
             pendingImmediateRun: this.pendingImmediateRun,
-            processedFilesCount: processedFiles.size,
-            debugConfig: DEBUG_CONFIG
+            processedFilesCount: configManager.getProcessedFilesCount(),
+            debugConfig: configManager.getConfig()
         };
     }
 
@@ -394,14 +416,13 @@ class SyncController {
     }
 
     async clearProcessedFiles() {
-        processedFiles.clear();
-        await this.saveProcessedFiles();
+        await configManager.clearProcessedFiles();
         console.log('🗑️ Cleared processed files list');
         return { success: true, message: 'Processed files list cleared' };
     }
 
     getProcessedFiles() {
-        return Array.from(processedFiles);
+        return configManager.getProcessedFilesArray();
     }
 }
 
@@ -410,5 +431,5 @@ const syncController = new SyncController();
 
 module.exports = {
     syncController,
-    DEBUG_CONFIG
+    configManager // Export configManager for external access
 };

@@ -25,114 +25,237 @@ class AmscanOrderProcessor {
      */
     async processAmscanFile(fileName, fileContent) {
         console.log(`🔄 Processing file: ${fileName}`);
+        console.log(`🔒 ZERO-KB PROTECTION ACTIVE: Files with 0 bytes will be completely ignored`);
+        console.log(`🔒 Size check: ${fileName} = ${fileContent ? fileContent.length : 'NO CONTENT'} bytes`);
         
         // Update processing status in UI
         this.updateProcessingStatus(`Processing ${fileName}...`);
         
-        // Check if this looks like an order file
-        if (fileName.includes('import') || fileContent.includes('soheader~') || fileContent.includes('sodetail~')) {
-            this.parseAmscanOrderFile(fileContent, async (orderHeader, orderItems) => {
-                // Initialize API if needed
-                await this.ensureApiInitialized();
+        // CRITICAL: Absolutely refuse to touch 0kb files
+        if (!fileContent || fileContent.length === 0) {
+            console.log(`🚫 ZERO-KB PROTECTION TRIGGERED: ${fileName} is 0kb - COMPLETELY IGNORED`);
+            this.updateProcessingStatus(`🚫 Protected ${fileName} - 0kb file ignored`);
+            
+            // Notify about protected file
+            if (window.processingResults) {
+                window.processingResults.addResult(fileName, {
+                    success: true,
+                    skipped: true,
+                    error: '0kb file - protected from processing'
+                });
+            }
+            return;
+        }
 
-                // Log the parsed data
-                console.log('📋 ORDER HEADER:');
-                console.log(JSON.stringify(orderHeader, null, 2));
-
-                console.log('📋 ORDER ITEMS:');
-                console.log(JSON.stringify(orderItems, null, 2));
-
-                // Make API call to get customer ID
-                console.log(`🔍 API: Looking up customer: "${orderHeader.deliveryName}"`);
+        // EXTRA PROTECTION: Also skip very small files
+        if (fileContent.length < 10) {
+            console.log(`⏭️ SKIP: ${fileName} (too small - ${fileContent.length} chars)`);
+            this.updateProcessingStatus(`⏭️ Skipped ${fileName} - too small`);
+            
+            if (window.processingResults) {
+                window.processingResults.addResult(fileName, {
+                    success: true,
+                    skipped: true,
+                    error: 'File too small to process'
+                });
+            }
+            return;
+        }
+        
+        try {
+            // Check if this looks like an order file
+            if (fileName.includes('import') || fileContent.includes('soheader~') || fileContent.includes('sodetail~')) {
                 
-                const customerResponse = await window.stoklyAPI.requester('GET', 
-                    `https://api.stok.ly/v0/customers?filter=[name]=={${orderHeader.deliveryName}}`
-                ).then(r=>{
-                    return r?.data?.[0]?.customerId
-                })
+                // Wrap the parsing in a promise so we can catch errors
+                const processingResult = await new Promise((resolve, reject) => {
+                    try {
+                        this.parseAmscanOrderFile(fileContent, async (orderHeader, orderItems) => {
+                            try {
+                                // Initialize API if needed
+                                await this.ensureApiInitialized();
 
-                console.log(orderHeader)
+                                // Make API call to get customer ID with proper URL encoding and error handling
+                                const encodedCustomerBarcode = encodeURIComponent(orderHeader.customerAccount);
 
-                if (customerResponse == undefined){
-                    customerResponse = await window.stoklyAPI.requester('POST', 
-                        `https://api.stok.ly/v0/customers`,
-                            {
-                            name: {
-                                forename: orderHeader.deliveryName,
-                                surname: orderHeader.deliveryName
-                            },
-                            address: {
-                                line1: orderHeader.deliveryAddressLine1,
-                                line2: orderHeader.deliveryAddressLine2,
-                                city: this.extractCityFromDeliveryAddress(orderHeader),
-                                country: 'GB',
-                                postcode: this.extractPostcodeFromDeliveryAddress(orderHeader),
-                                region: ''
-                            },
-                            barcode: orderHeader.customerAccount,
-                            "type": 1,
-                            "shippingAddresses": [
-                                {
-                                    line1: orderHeader.deliveryAddressLine1,
-                                    line2: orderHeader.deliveryAddressLine2,
-                                    city: this.extractCityFromDeliveryAddress(orderHeader),
-                                    country: 'GB',
-                                    postcode: this.extractPostcodeFromDeliveryAddress(orderHeader),
-                                    region: ''
+                                let customerResponse;
+
+                                try {
+                                    // First, try to find existing customer
+                                    console.log('🔍 CUSTOMER: Searching for existing customer...');
+                                    const searchResult = await window.stoklyAPI.requester('GET', 
+                                        `https://api.stok.ly/v0/customers?filter=[barcode]=={${encodedCustomerBarcode}}`
+                                    );
+                                    
+                                    customerResponse = searchResult?.data?.[0]?.customerId;
+                                    
+                                    if (customerResponse) {
+                                        console.log('✅ CUSTOMER: Found existing customer with ID:', customerResponse);
+                                    } else {
+                                        console.log('❌ CUSTOMER: Customer not found, creating new customer...');
+                                        
+                                        // Customer not found, create new one
+                                        const customerData = {
+                                            name: {
+                                                forename: orderHeader.deliveryName,
+                                                surname: orderHeader.deliveryName
+                                            },
+                                            address: {
+                                                line1: orderHeader.deliveryAddressLine1,
+                                                line2: orderHeader.deliveryAddressLine2,
+                                                city: this.extractCityFromDeliveryAddress(orderHeader),
+                                                country: 'GB',
+                                                postcode: this.extractPostcodeFromDeliveryAddress(orderHeader),
+                                                region: ''
+                                            },
+                                            barcode: orderHeader.customerAccount,
+                                            "type": 1,
+                                            "shippingAddresses": [
+                                                {
+                                                    line1: orderHeader.deliveryAddressLine1,
+                                                    line2: orderHeader.deliveryAddressLine2,
+                                                    city: this.extractCityFromDeliveryAddress(orderHeader),
+                                                    country: 'GB',
+                                                    postcode: this.extractPostcodeFromDeliveryAddress(orderHeader),
+                                                    region: ''
+                                                }
+                                            ],
+                                            "fullName": orderHeader.deliveryName
+                                        };
+                                        
+                                        console.log('🔄 CUSTOMER: Creating customer with data:', customerData);
+                                        
+                                        try {
+                                            const createResult = await window.stoklyAPI.requester('POST', 
+                                                `https://api.stok.ly/v0/customers`,
+                                                customerData
+                                            );
+                                            
+                                            console.log('🔄 CUSTOMER: Create API response:', createResult);
+                                            
+                                            // Check if customer creation was successful
+                                            if (!createResult || !createResult.data || !createResult.data.data || !createResult.data.data.id) {
+                                                throw new Error(`Customer creation failed: Invalid response structure. Response: ${JSON.stringify(createResult)}`);
+                                            }
+                                            
+                                            // Wait for the system to process (as per original code)
+                                            console.log('⏳ CUSTOMER: Waiting 5 seconds for customer creation to process...');
+                                            await new Promise(resolve => setTimeout(resolve, 5000));
+                                            
+                                            customerResponse = createResult.data.data.id;
+                                            console.log('✅ CUSTOMER: Successfully created customer with ID:', customerResponse);
+                                            
+                                        } catch (createError) {
+                                            console.error('❌ CUSTOMER: Failed to create customer:', createError);
+                                            
+                                            // Provide detailed error information
+                                            let errorMessage = 'Customer creation failed';
+                                            if (createError.message) {
+                                                errorMessage += `: ${createError.message}`;
+                                            }
+                                            if (createError.response) {
+                                                errorMessage += ` (HTTP ${createError.response.status})`;
+                                            }
+                                            
+                                            throw new Error(errorMessage);
+                                        }
+                                    }
+                                    
+                                    // Validate that we have a customer ID before proceeding
+                                    if (!customerResponse) {
+                                        throw new Error('No customer ID obtained - cannot proceed with order creation');
+                                    }
+                                    
+                                    console.log('✅ CUSTOMER: Customer ID confirmed:', customerResponse);
+                                    
+                                } catch (customerError) {
+                                    console.error('❌ CUSTOMER: Customer handling failed:', customerError);
+                                    throw new Error(`Customer processing failed: ${customerError.message}`);
                                 }
-                            ],
-                            "fullName": orderHeader.deliveryName
-                        }
-                        ).then(r => {
-                            return new Promise(resolve => {
-                                setTimeout(() => {
-                                    resolve(r.data.data.id);
-                                }, 5000);
-                            });
+
+                                // Create the order object
+                                const order = await this.createOrderObject(orderHeader, orderItems, customerResponse);
+
+                                console.log('✅ Order processed successfully:', order.sourceReferenceId);
+                                
+                                // Check if there were any missing SKUs
+                                const hasWarnings = order._metadata && order._metadata.missingSkus.length > 0;
+                                
+                                // Resolve with success data including warning information
+                                resolve({
+                                    success: true,
+                                    hasWarnings: hasWarnings,
+                                    orderData: {
+                                        orderId: order.sourceReferenceId,
+                                        itemCount: order.items.length,
+                                        totalItems: orderItems.length,
+                                        skippedItems: hasWarnings ? order._metadata.skippedItemsCount : 0,
+                                        missingSkus: hasWarnings ? order._metadata.missingSkus : [],
+                                        totalValue: orderItems.reduce((sum, item) => sum + item.lineValue, 0),
+                                        processedValue: order.items.reduce((sum, item) => sum + item.displayLineTotal, 0),
+                                        customerId: customerResponse || 'N/A',
+                                        warningMessage: hasWarnings ? `${order._metadata.skippedItemsCount} items skipped (missing SKUs)` : null
+                                    }
+                                });
+                                
+                            } catch (processingError) {
+                                console.error('❌ Error processing order:', processingError);
+                                reject(processingError);
+                            }
                         });
-                }
-
-                console.log(customerResponse)
+                    } catch (parseError) {
+                        console.error('❌ Error parsing order file:', parseError);
+                        reject(parseError);
+                    }
+                });
                 
-                console.log('🔍 API Response:', customerResponse);
-
-                // Create the order object
-                const order = await this.createOrderObject(orderHeader, orderItems, customerResponse);
-
-                console.log(order)
-                
-                // Update processing status
+                // If we get here, processing was successful
                 this.updateProcessingStatus(`✅ Successfully processed ${fileName}`);
                 
                 // Notify the main process of successful processing
                 if (window.electronAPI && window.electronAPI.notifyProcessingComplete) {
-                    await window.electronAPI.notifyProcessingComplete(fileName, {
-                        success: true,
-                        orderData: {
-                            orderId: order.sourceReferenceId,
-                            itemCount: order.items.length,
-                            totalValue: orderItems.reduce((sum, item) => sum + item.lineValue, 0),
-                            customerId: customerResponse || 'N/A'
-                        }
-                    });
+                    await window.electronAPI.notifyProcessingComplete(fileName, processingResult);
                 }
 
                 // Add to sidebar results
                 if (window.processingResults) {
+                    window.processingResults.addResult(fileName, processingResult);
+                }
+                
+            } else {
+                // Not an order file
+                this.updateProcessingStatus(`⏭️ Skipped ${fileName} - not an order file`);
+                
+                // Notify about skipped file
+                if (window.processingResults) {
                     window.processingResults.addResult(fileName, {
-                        success: true,
-                        orderData: {
-                            orderId: order.sourceReferenceId,
-                            itemCount: order.items.length,
-                            totalValue: orderItems.reduce((sum, item) => sum + item.lineValue, 0),
-                            customerId: customerResponse || 'N/A'
-                        }
+                        success: false,
+                        skipped: true,
+                        error: 'Not an order file'
                     });
                 }
-            });
-        } else {
-            console.log(`⏭️ Skipping ${fileName} - not an order file`);
-            this.updateProcessingStatus(`⏭️ Skipped ${fileName} - not an order file`);
+            }
+            
+        } catch (error) {
+            console.error(`❌ Error processing file ${fileName}:`, error);
+            
+            // Update processing status with error
+            this.updateProcessingStatus(`❌ Failed to process ${fileName}: ${error.message}`);
+            
+            // Notify the main process of failed processing
+            if (window.electronAPI && window.electronAPI.notifyProcessingComplete) {
+                await window.electronAPI.notifyProcessingComplete(fileName, {
+                    success: false,
+                    error: error.message
+                });
+            }
+
+            // Add error to sidebar results
+            if (window.processingResults) {
+                window.processingResults.addResult(fileName, {
+                    success: false,
+                    error: error.message
+                });
+            }
         }
     }
 
@@ -158,8 +281,6 @@ class AmscanOrderProcessor {
             console.error('❌ API previously failed to initialize:', this.apiError);
             throw new Error(`API initialization failed: ${this.apiError}`);
         }
-
-        console.log('🔧 Checking API initialization...');
         
         // Check if credentials are available
         if (!window.appCredentials || !window.appCredentials.isLoaded) {
@@ -176,8 +297,6 @@ class AmscanOrderProcessor {
             this.apiError = error;
             throw new Error(error);
         }
-
-        console.log('🔑 Found stored credentials, initializing API...');
         
         // Initialize the API (should already be done by credentials handler, but double-check)
         const success = await window.stoklyAPI.initializeStoklyAPI({
@@ -189,11 +308,9 @@ class AmscanOrderProcessor {
 
         if (success) {
             this.apiInitialized = true;
-            console.log('✅ Stokly API initialized successfully');
             return true;
         } else {
             const error = 'API initialization returned false';
-            console.error('❌ API Initialization Failed:', error);
             this.apiError = error;
             throw new Error(error);
         }
@@ -201,11 +318,12 @@ class AmscanOrderProcessor {
 
     /**
      * Create order object with all values rounded to 4 decimal places
+     * FIXED: Proper handling of missing SKUs
      */
     async createOrderObject(orderHeader, orderItems, customerId = null) {
-        console.log(orderItems)
         
         let skuLookup = {};
+        let missingSkus = [];
 
         const productCodes = orderItems.map(item => item.productCode);
 
@@ -222,6 +340,60 @@ class AmscanOrderProcessor {
         }
 
         const date = new Date().toISOString();
+
+        // Check for missing SKUs and build the items array
+        const validItems = [];
+        const skippedItems = [];
+
+        for (const item of orderItems) {
+            const itemId = skuLookup[item.productCode.trim().toLowerCase()];
+            
+            if (itemId) {
+                // SKU found - add to valid items
+                const displayPrice = this.roundTo4Decimals(item.lineValue / item.quantityOrdered);
+                const displayDiscount = this.roundTo4Decimals((item.unitPrice - (item.lineValue / item.quantityOrdered)));
+                const displayLineDiscount = this.roundTo4Decimals(item.unitPrice * item.quantityOrdered - item.lineValue);
+                
+                validItems.push({
+                    "type": "item",
+                    "referenceId": itemId,
+                    "displayPrice": displayPrice,
+                    "displayTax": this.roundTo4Decimals(0),
+                    "quantity": item.quantityOrdered,
+                    "displayDiscount": displayDiscount,
+                    "displayLinePrice": this.roundTo4Decimals(item.lineValue),
+                    "displayLineTax": this.roundTo4Decimals(0),
+                    "displayLineDiscount": displayLineDiscount,
+                    "displayLineTotal": this.roundTo4Decimals(item.lineValue),
+                    "fulfilmentType": "delivery"
+                });
+            } else {
+                // SKU not found - add to skipped items
+                skippedItems.push({
+                    productCode: item.productCode,
+                    description: item.description,
+                    quantity: item.quantityOrdered,
+                    lineValue: item.lineValue
+                });
+                missingSkus.push(item.productCode);
+            }
+        }
+
+        // Log information about missing SKUs
+        if (missingSkus.length > 0) {
+            console.warn(`⚠️ Missing ${missingSkus.length} SKUs in system:`, missingSkus);
+            console.warn(`⚠️ Skipped items:`, skippedItems);
+        }
+
+        // Check if we have any valid items to process
+        if (validItems.length === 0) {
+            throw new Error(`No valid items found. All ${orderItems.length} SKUs are missing from the system: ${missingSkus.join(', ')}`);
+        }
+
+        // If we have some missing SKUs but some valid ones, log a warning but continue
+        if (missingSkus.length > 0) {
+            console.warn(`⚠️ Order ${orderHeader.orderId}: Processing ${validItems.length} valid items, skipping ${missingSkus.length} missing SKUs`);
+        }
 
         const order = {
             createdAt: date,
@@ -247,29 +419,19 @@ class AmscanOrderProcessor {
                 cost: this.roundTo4Decimals(0),
                 tax: this.roundTo4Decimals(0)
             },
-            items: orderItems.map(item => {
-                const displayPrice = this.roundTo4Decimals(item.lineValue / item.quantityOrdered);
-                const displayDiscount = this.roundTo4Decimals((item.unitPrice - (item.lineValue / item.quantityOrdered)));
-                const displayLineDiscount = this.roundTo4Decimals(item.unitPrice * item.quantityOrdered - item.lineValue);
-                
-                return {
-                    "type": "item",
-                    "referenceId": skuLookup[item.productCode.trim().toLowerCase()],
-                    "displayPrice": displayPrice,
-                    "displayTax": this.roundTo4Decimals(0),
-                    "quantity": item.quantityOrdered,
-                    "displayDiscount": displayDiscount,
-                    "displayLinePrice": this.roundTo4Decimals(item.lineValue),
-                    "displayLineTax": this.roundTo4Decimals(0),
-                    "displayLineDiscount": displayLineDiscount,
-                    "displayLineTotal": this.roundTo4Decimals(item.lineValue),
-                    "fulfilmentType": "delivery"
-                };
-            }),
+            items: validItems, // Only include valid items
             customer: {
                 customerId: customerId
             },
-            payments: []
+            payments: [],
+            // Add metadata about missing items for reference
+            _metadata: {
+                totalItemsInOriginalOrder: orderItems.length,
+                validItemsProcessed: validItems.length,
+                skippedItemsCount: skippedItems.length,
+                missingSkus: missingSkus,
+                skippedItems: skippedItems
+            }
         };
 
         return order;
@@ -526,18 +688,11 @@ const amscanOrderProcessor = new AmscanOrderProcessor();
 // Make it globally available
 window.amscanOrderProcessor = amscanOrderProcessor;
 
-// Debug: Check if electronAPI is available
-console.log('🔧 Checking electronAPI availability:', !!window.electronAPI);
-console.log('🔧 Available electronAPI methods:', window.electronAPI ? Object.keys(window.electronAPI) : 'None');
-
 // Listen for file processing requests from main process
 if (window.electronAPI && window.electronAPI.onProcessFile) {
-    console.log('🔧 Setting up file processing listener...');
     window.electronAPI.onProcessFile((fileName, fileContent) => {
-        console.log(`📥 Received file from main process: ${fileName}`);
         amscanOrderProcessor.processAmscanFile(fileName, fileContent);
     });
-    console.log('✅ File processing listener set up successfully');
 } else {
     console.error('❌ electronAPI.onProcessFile not available - files will not be processed');
     

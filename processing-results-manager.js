@@ -88,6 +88,8 @@ class ProcessingResultsManager {
             fileName: fileName,
             timestamp: timestamp,
             success: result.success,
+            hasWarnings: result.hasWarnings || false,
+            skipped: result.skipped || false,
             data: result.orderData || null,
             error: result.error || null
         };
@@ -141,13 +143,34 @@ class ProcessingResultsManager {
         this.resultsList.appendChild(fragment);
     }
 
-    // Create a result element
+    // Create a result element with enhanced error handling and warning support
     createResultElement(result) {
         const div = document.createElement('div');
-        div.className = `result-item ${result.success ? 'success' : 'error'}`;
-
-        const statusIcon = result.success ? '✅' : '❌';
-        const statusText = result.success ? 'Success' : 'Failed';
+        
+        // Determine the status and styling
+        let statusClass, statusIcon, statusText;
+        
+        if (result.success) {
+            if (result.hasWarnings) {
+                statusClass = 'warning';
+                statusIcon = '⚠️';
+                statusText = 'Success with Warnings';
+            } else {
+                statusClass = 'success';
+                statusIcon = '✅';
+                statusText = 'Success';
+            }
+        } else if (result.skipped) {
+            statusClass = 'skipped';
+            statusIcon = '⏭️';
+            statusText = 'Skipped';
+        } else {
+            statusClass = 'error';
+            statusIcon = '❌';
+            statusText = 'Failed';
+        }
+        
+        div.className = `result-item ${statusClass}`;
 
         div.innerHTML = `
             <div class="result-header">
@@ -159,34 +182,91 @@ class ProcessingResultsManager {
                 <div class="result-status">${statusText}</div>
             </div>
             <div class="result-details">
-                ${result.success ? this.createSuccessDetails(result.data) : this.createErrorDetails(result.error)}
+                ${result.success ? this.createSuccessDetails(result.data) : 
+                  result.skipped ? this.createSkippedDetails(result.error) : 
+                  this.createErrorDetails(result.error)}
             </div>
         `;
 
         return div;
     }
 
-    // Create success details HTML
+    // Enhanced createSuccessDetails to show warnings
     createSuccessDetails(data) {
         if (!data) {
             return '<p>Processing completed successfully</p>';
         }
 
+        let warningSection = '';
+        if (data.skippedItems > 0) {
+            warningSection = `
+                <div class="warning-section">
+                    <p><strong>⚠️ Warnings:</strong></p>
+                    <p><strong>Items Skipped:</strong> ${data.skippedItems} (missing SKUs)</p>
+                    <p><strong>Missing SKUs:</strong> ${data.missingSkus.slice(0, 3).join(', ')}${data.missingSkus.length > 3 ? '...' : ''}</p>
+                </div>
+            `;
+        }
+
         return `
             <div class="success-details">
                 <p><strong>Order ID:</strong> ${data.orderId || 'N/A'}</p>
-                <p><strong>Items:</strong> ${data.itemCount || 0}</p>
-                <p><strong>Total Value:</strong> £${data.totalValue ? data.totalValue.toFixed(2) : '0.00'}</p>
+                <p><strong>Items Processed:</strong> ${data.itemCount || 0}${data.totalItems ? ` of ${data.totalItems}` : ''}</p>
+                <p><strong>Processed Value:</strong> £${data.processedValue ? data.processedValue.toFixed(2) : (data.totalValue ? data.totalValue.toFixed(2) : '0.00')}</p>
                 <p><strong>Customer ID:</strong> ${data.customerId || 'N/A'}</p>
+                ${warningSection}
             </div>
         `;
     }
 
-    // Create error details HTML
+    // Create skipped details HTML
+    createSkippedDetails(reason) {
+        return `
+            <div class="skipped-details">
+                <p><strong>Reason:</strong> ${reason || 'File was skipped'}</p>
+            </div>
+        `;
+    }
+
+    // Enhanced error details with categorization and advice
     createErrorDetails(error) {
+        let errorCategory = 'Unknown error';
+        let errorAdvice = '';
+        
+        if (error) {
+            const errorLower = error.toLowerCase();
+            
+            if (errorLower.includes('api') || errorLower.includes('authentication') || errorLower.includes('credentials')) {
+                errorCategory = 'API Error';
+                errorAdvice = 'Check API credentials and connection';
+            } else if (errorLower.includes('customer') || errorLower.includes('not found')) {
+                errorCategory = 'Customer Error';
+                errorAdvice = 'Customer lookup or creation failed';
+            } else if (errorLower.includes('parse') || errorLower.includes('format')) {
+                errorCategory = 'File Format Error';
+                errorAdvice = 'Check file format and structure';
+            } else if (errorLower.includes('network') || errorLower.includes('timeout')) {
+                errorCategory = 'Network Error';
+                errorAdvice = 'Check internet connection';
+            } else if (errorLower.includes('initialization') || errorLower.includes('initialize')) {
+                errorCategory = 'Initialization Error';
+                errorAdvice = 'Check API credentials configuration';
+            } else if (errorLower.includes('url') || errorLower.includes('encoding')) {
+                errorCategory = 'URL/Encoding Error';
+                errorAdvice = 'Special characters in customer name may need encoding';
+            } else if (errorLower.includes('no valid items') || errorLower.includes('missing from the system')) {
+                errorCategory = 'Missing SKU Error';
+                errorAdvice = 'All product SKUs are missing from your system inventory';
+            } else {
+                errorCategory = 'Processing Error';
+            }
+        }
+        
         return `
             <div class="error-details">
+                <p><strong>Category:</strong> ${errorCategory}</p>
                 <p><strong>Error:</strong> ${error || 'Unknown error occurred'}</p>
+                ${errorAdvice ? `<p class="error-advice"><strong>Suggestion:</strong> ${errorAdvice}</p>` : ''}
             </div>
         `;
     }
@@ -211,18 +291,23 @@ class ProcessingResultsManager {
         }
     }
 
-    // Get current statistics
+    // Enhanced statistics with skipped files and warnings
     getStatistics() {
         const allResults = this.getAllResults();
         const total = allResults.length;
-        const successful = allResults.filter(r => r.success).length;
-        const failed = allResults.filter(r => !r.success).length;
+        const successful = allResults.filter(r => r.success && !r.hasWarnings).length;
+        const successWithWarnings = allResults.filter(r => r.success && r.hasWarnings).length;
+        const failed = allResults.filter(r => !r.success && !r.skipped).length;
+        const skipped = allResults.filter(r => r.skipped).length;
         
         return {
             total,
             successful,
+            successWithWarnings,
             failed,
-            successRate: total > 0 ? (successful / total * 100).toFixed(1) : 0
+            skipped,
+            successRate: total > 0 ? ((successful + successWithWarnings) / total * 100).toFixed(1) : 0,
+            cleanSuccessRate: total > 0 ? (successful / total * 100).toFixed(1) : 0
         };
     }
 }

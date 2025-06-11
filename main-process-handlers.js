@@ -325,6 +325,17 @@ async function setupIPCHandlers() {
             return { success: false, error: error.message };
         }
     });
+
+    ipcMain.handle('clear-processed-files', async (event) => {
+        try {
+            const { configManager } = require('./sync-controller');
+            await configManager.clearProcessedFiles();
+            return { success: true, message: 'Processed files cleared' };
+        } catch (error) {
+            console.error('Error clearing processed files:', error);
+            return { success: false, error: error.message };
+        }
+    });
 }
 
 // Alternative: Get store instance (for other uses in main process)

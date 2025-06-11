@@ -1,7 +1,7 @@
 {
-  "name": "simple-electron-app",
+  "name": "AmScan-SFTP",
   "version": "1.0.0",
-  "description": "Morrisons EDI",
+  "description": "AmScan SFTP",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -30,7 +30,7 @@
   },
   "build": {
     "appId": "com.yourname.simple-electron-app",
-    "productName": "Morrisons EDI",
+    "productName": "AmScan SFTP",
     "directories": {
       "output": "dist"
     },
@@ -56,9 +56,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Morrisons EDI",
+      "shortcutName": "AmScan SFTP",
       "runAfterFinish": true,
-      "artifactName": "Morrisons EDI Setup.exe"
+      "artifactName": "AmScan SFTP Setup.exe"
     },
     "mac": {
       "category": "public.app-category.utilities",
@@ -73,7 +73,7 @@
       ]
     },
     "dmg": {
-      "title": "Morrisons EDI",
+      "title": "AmScan SFTP",
       "window": {
         "width": 540,
         "height": 380

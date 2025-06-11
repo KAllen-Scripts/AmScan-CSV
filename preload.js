@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // NEW: Change sync interval without interruption
     changeAutoSyncInterval: (minutes) => ipcRenderer.invoke('change-auto-sync-interval', minutes),
     
+    // ADDED: Clear processed files
+    clearProcessedFiles: () => ipcRenderer.invoke('clear-processed-files'),
+    
     // Remove listeners (cleanup)
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
 });

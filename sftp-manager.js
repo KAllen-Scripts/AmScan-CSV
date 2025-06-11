@@ -1,70 +1,27 @@
-// SFTP Manager WITHOUT separate connectivity testing
-// Goes directly to SFTP connection to avoid triggering rate limiting
+// FIXED: SFTP Manager - Only add to processed files on complete success
+// Uses unified configuration and storage
 
 const SftpClient = require('ssh2-sftp-client');
 const path = require('path');
 const fs = require('fs').promises;
+const configManager = require('./config-manager');
 
 class SFTPManager {
     constructor() {
         this.sftp = null;
         this.isConnected = false;
-        this.processedFiles = new Set();
-        this.processedFilesPath = null;
         this.syncInterval = null;
         this.isRunning = false;
         this.currentConfig = null;
         this.connectionTimeout = null;
         
-        // DEBUG TOGGLES
-        this.DEBUG_DELETE_FILES = false;
-        this.DEBUG_SKIP_PROCESSED = false;
-        this.DEBUG_USE_LOCAL_FILE = false;  // Set to true to use local file instead of SFTP
-        this.DEBUG_LOCAL_FILE_PATH = './2025-04-07-075001_import.txt';  // Path to local test file
-        
-        console.log(`🐛 DEBUG MODE: File Deletion = ${this.DEBUG_DELETE_FILES ? 'ENABLED' : 'DISABLED'}`);
-        console.log(`🐛 DEBUG MODE: Skip Processed Files = ${this.DEBUG_SKIP_PROCESSED ? 'ENABLED' : 'DISABLED'}`);
-        console.log(`🐛 DEBUG MODE: Use Local File = ${this.DEBUG_USE_LOCAL_FILE ? 'ENABLED' : 'DISABLED'}`);
-        if (this.DEBUG_USE_LOCAL_FILE) {
-            console.log(`🐛 DEBUG MODE: Local File Path = ${this.DEBUG_LOCAL_FILE_PATH}`);
-        }
-        
-        this.initializeStorage();
+        console.log('🔗 SFTP: Initialized with unified configuration');
         
         // Ensure cleanup on process exit
         process.on('exit', () => this.forceCleanup());
         process.on('SIGINT', () => this.forceCleanup());
         process.on('SIGTERM', () => this.forceCleanup());
         process.on('uncaughtException', () => this.forceCleanup());
-    }
-
-    async initializeStorage() {
-        const { app } = require('electron');
-        const userDataPath = app.getPath('userData');
-        this.processedFilesPath = path.join(userDataPath, 'processed_files.json');
-        await this.loadProcessedFiles();
-    }
-
-    async loadProcessedFiles() {
-        try {
-            const data = await fs.readFile(this.processedFilesPath, 'utf8');
-            const fileArray = JSON.parse(data);
-            this.processedFiles = new Set(fileArray);
-            console.log(`Loaded ${this.processedFiles.size} previously processed files`);
-        } catch (error) {
-            console.log('No previous processed files found, starting fresh');
-            this.processedFiles = new Set();
-        }
-    }
-
-    async saveProcessedFiles() {
-        try {
-            const fileArray = Array.from(this.processedFiles);
-            await fs.writeFile(this.processedFilesPath, JSON.stringify(fileArray, null, 2));
-            console.log(`Saved ${fileArray.length} processed files to storage`);
-        } catch (error) {
-            console.error('Error saving processed files:', error);
-        }
     }
 
     forceCleanup() {
@@ -91,7 +48,6 @@ class SFTPManager {
         // Always ensure clean state before connecting
         await this.disconnect();
         
-        // NO SEPARATE CONNECTIVITY TEST - go directly to SFTP
         console.log(`🔗 DIRECT-CONNECT: Attempting SFTP connection to ${credentials.host}:${credentials.port || 22}...`);
         console.log(`🔗 DIRECT-CONNECT: Skipping separate connectivity test to avoid rate limiting`);
 
@@ -232,25 +188,36 @@ class SFTPManager {
 
         try {
             console.log(`📂 LIST: Listing files in: ${remotePath}`);
+            console.log(`🔒 ZERO-KB PROTECTION: Files with 0 bytes will be completely ignored`);
             
             const fileList = await this.sftp.list(remotePath);
             
             const files = fileList
                 .filter(item => {
-                    // Only regular files
-                    if (item.type !== '-') return false;
-                    
-                    // Skip 0kb files - NOTHING happens to them
-                    if (item.size === 0) {
-                        console.log(`⏭️ SKIP: ${item.name} (0kb file - ignored completely)`);
+                    // CRITICAL: Only regular files
+                    if (item.type !== '-') {
+                        console.log(`⏭️ SKIP: ${item.name} (not a regular file - type: ${item.type})`);
                         return false;
                     }
                     
+                    // CRITICAL: Skip 0kb files - ABSOLUTELY NOTHING happens to them
+                    if (item.size === 0) {
+                        console.log(`🚫 ZERO-KB PROTECTION: ${item.name} (0kb file - COMPLETELY IGNORED)`);
+                        return false;
+                    }
+                    
+                    // EXTRA PROTECTION: Also skip very small files that might be corrupt
+                    if (item.size < 10) {
+                        console.log(`⏭️ SKIP: ${item.name} (too small - ${item.size} bytes)`);
+                        return false;
+                    }
+                    
+                    console.log(`✅ INCLUDE: ${item.name} (${item.size} bytes)`);
                     return true;
                 })
                 .map(item => item.name);
             
-            console.log(`✅ LIST: Found ${files.length} non-empty files`);
+            console.log(`✅ LIST: Found ${files.length} valid files (0kb files completely ignored)`);
             if (files.length > 0) {
                 console.log(`📂 LIST: Files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
             }
@@ -275,30 +242,57 @@ class SFTPManager {
             const fileContent = await this.sftp.get(remoteFilePath);
             const textContent = fileContent.toString('utf8');
             
-            // Just log basic info - don't process here
-            console.log(`📄 PROCESSING: ${fileName} (${textContent.length} chars)`);
-            console.log(`Preview: ${textContent.substring(0, 100)}${textContent.length > 100 ? '...' : ''}`);
-            console.log(`📄 END: ${fileName}`);
-            
-            // DEBUG: Conditionally delete
-            if (this.DEBUG_DELETE_FILES) {
-                try {
-                    await this.sftp.delete(remoteFilePath);
-                    console.log(`🗑️ DEBUG: Deleted ${fileName} from server`);
-                } catch (deleteError) {
-                    console.error(`⚠️ DEBUG: Failed to delete ${fileName}:`, deleteError.message);
-                }
-            } else {
-                console.log(`🐛 DEBUG: File deletion DISABLED - ${fileName} left on server`);
+            // CRITICAL: Double-check file size after download
+            if (!textContent || textContent.length === 0) {
+                console.log(`🚫 ZERO-KB PROTECTION: ${fileName} downloaded as 0kb - COMPLETELY IGNORED`);
+                return { fileName, content: null, skipped: true, reason: 'zero-kb-after-download' };
+            }
+
+            if (textContent.length < 10) {
+                console.log(`⏭️ SKIP: ${fileName} too small after download (${textContent.length} chars)`);
+                return { fileName, content: null, skipped: true, reason: 'too-small-after-download' };
             }
             
-            this.processedFiles.add(fileName);
-            console.log(`✅ DOWNLOAD: Successfully processed: ${fileName}`);
-            return { fileName, content: textContent };
+            // Just log basic info - don't process here
+            console.log(`📄 DOWNLOADED: ${fileName} (${textContent.length} chars)`);
+            console.log(`Preview: ${textContent.substring(0, 100)}${textContent.length > 100 ? '...' : ''}`);
+            
+            // ❌ REMOVED: DO NOT add to processed files here - wait for processing confirmation
+            // configManager.addProcessedFile(fileName); // REMOVED THIS LINE
+            console.log(`💾 HOLDING: ${fileName} on server until processing confirmed`);
+            
+            console.log(`✅ DOWNLOAD: Successfully downloaded: ${fileName} (NOT yet marked as processed)`);
+            
+            return { 
+                fileName, 
+                content: textContent, 
+                remoteFilePath: remoteFilePath // Include path for later deletion
+            };
             
         } catch (error) {
             console.error(`❌ DOWNLOAD: Failed to process ${fileName}:`, error.message);
             throw error;
+        }
+    }
+
+    async deleteFileAfterSuccess(remoteFilePath, fileName) {
+        if (!this.isConnected || !this.sftp) {
+            console.warn(`⚠️ DELETE: Cannot delete ${fileName} - not connected to SFTP server`);
+            return false;
+        }
+
+        if (!configManager.fileDeletion) {
+            console.log(`🐛 CONFIG: File deletion DISABLED - ${fileName} left on server`);
+            return false;
+        }
+
+        try {
+            await this.sftp.delete(remoteFilePath);
+            console.log(`🗑️ SUCCESS-DELETE: ${fileName} deleted from server after successful processing`);
+            return true;
+        } catch (deleteError) {
+            console.error(`⚠️ DELETE-ERROR: Failed to delete ${fileName} after success:`, deleteError.message);
+            return false;
         }
     }
 
@@ -307,10 +301,13 @@ class SFTPManager {
         
         try {
             console.log(`🔄 SYNC: Starting sync operation...`);
+            console.log(`🔒 ZERO-KB PROTECTION: All 0kb files will be completely ignored`);
+            console.log(`🛡️ SAFE DELETION: Files only deleted after complete processing success`);
+            console.log(`✅ FIXED: Files only added to processed list after complete success`);
             
-            // DEBUG: Check if we should use local file instead of SFTP
-            if (this.DEBUG_USE_LOCAL_FILE) {
-                console.log(`🐛 DEBUG: Using local file instead of SFTP connection`);
+            // Check if we should use local file instead of SFTP
+            if (configManager.useLocalFile) {
+                console.log(`🐛 CONFIG: Using local file instead of SFTP connection`);
                 return await this.processLocalFile();
             }
             
@@ -322,27 +319,36 @@ class SFTPManager {
             let filesToProcess;
             let skippedCount = 0;
             
-            if (this.DEBUG_SKIP_PROCESSED) {
-                filesToProcess = remoteFiles.filter(fileName => !this.processedFiles.has(fileName));
+            if (configManager.skipProcessedFiles) {
+                filesToProcess = remoteFiles.filter(fileName => !configManager.hasProcessedFile(fileName));
                 skippedCount = remoteFiles.length - filesToProcess.length;
                 console.log(`🔄 SYNC: Processing ${filesToProcess.length} new files, skipping ${skippedCount}`);
             } else {
                 filesToProcess = remoteFiles;
-                console.log(`🔄 SYNC: Processing all ${filesToProcess.length} files (debug mode)`);
+                console.log(`🔄 SYNC: Processing all ${filesToProcess.length} files (skip processed disabled)`);
             }
 
             let processedCount = 0;
             let errorCount = 0;
             let deletedCount = 0;
+            let zeroKbSkippedCount = 0;
             const downloadedFiles = [];
 
             for (const fileName of filesToProcess) {
                 try {
                     const fileData = await this.downloadAndProcessFile(remotePath, fileName);
-                    downloadedFiles.push(fileData);
-                    processedCount++;
-                    if (this.DEBUG_DELETE_FILES) {
-                        deletedCount++;
+                    
+                    if (fileData.skipped) {
+                        if (fileData.reason.includes('zero-kb')) {
+                            zeroKbSkippedCount++;
+                            console.log(`🚫 PROTECTED: ${fileName} (0kb file)`);
+                        } else {
+                            console.log(`⏭️ SKIPPED: ${fileName} (${fileData.reason})`);
+                        }
+                    } else {
+                        downloadedFiles.push(fileData);
+                        processedCount++;
+                        // Note: deletedCount will be updated later after processing confirmation
                     }
                 } catch (error) {
                     console.error(`❌ SYNC: Failed to process ${fileName}:`, error.message);
@@ -350,22 +356,24 @@ class SFTPManager {
                 }
             }
 
-            await this.saveProcessedFiles();
+            // ❌ REMOVED: Do not save processed files here - wait for processing confirmation
+            // await configManager.saveProcessedFiles(); // REMOVED THIS LINE
             
-            const summary = `✅ SYNC: Completed - ${processedCount} processed, ${errorCount} errors`;
-            const details = `${deletedCount} deleted, ${skippedCount} skipped [Delete=${this.DEBUG_DELETE_FILES ? 'ON' : 'OFF'}, Skip=${this.DEBUG_SKIP_PROCESSED ? 'ON' : 'OFF'}]`;
+            const summary = `✅ SYNC: Completed - ${processedCount} downloaded, ${errorCount} errors, ${zeroKbSkippedCount} 0kb files protected`;
+            const details = `${skippedCount} skipped [Delete=${configManager.fileDeletion ? 'ON' : 'OFF'}, Skip=${configManager.skipProcessedFiles ? 'ON' : 'OFF'}] - Files held for processing confirmation`;
             console.log(`${summary}, ${details}`);
             
             return { 
                 processedCount, 
                 errorCount, 
                 totalFiles: remoteFiles.length,
-                deletedCount,
+                deletedCount: 0, // Will be updated later after processing
                 deletionErrors: 0,
                 skippedCount,
+                zeroKbSkippedCount,
                 newFiles: filesToProcess.length,
-                debugDeleteFiles: this.DEBUG_DELETE_FILES,
-                debugSkipProcessed: this.DEBUG_SKIP_PROCESSED,
+                debugDeleteFiles: configManager.fileDeletion,
+                debugSkipProcessed: configManager.skipProcessedFiles,
                 files: downloadedFiles
             };
 
@@ -387,6 +395,9 @@ class SFTPManager {
         }
 
         console.log(`🔄 AUTO: Starting auto sync every ${intervalMinutes} minutes (no pre-testing)`);
+        console.log(`🔒 ZERO-KB PROTECTION: All 0kb files will be completely ignored`);
+        console.log(`🛡️ SAFE DELETION: Files only deleted after complete processing success`);
+        console.log(`✅ FIXED: Files only added to processed list after complete success`);
         this.isRunning = true;
 
         // Initial sync
@@ -415,6 +426,7 @@ class SFTPManager {
                         newFiles: result.newFiles,
                         deletedCount: result.deletedCount,
                         deletionErrors: result.deletionErrors,
+                        zeroKbSkippedCount: result.zeroKbSkippedCount,
                         debugDeleteFiles: result.debugDeleteFiles,
                         debugSkipProcessed: result.debugSkipProcessed
                     });
@@ -455,7 +467,7 @@ class SFTPManager {
         return {
             isRunning: this.isRunning,
             isConnected: this.isConnected,
-            processedFilesCount: this.processedFiles.size,
+            processedFilesCount: configManager.getProcessedFilesCount(),
             currentConfig: this.currentConfig ? {
                 host: this.currentConfig.host,
                 port: this.currentConfig.port,
@@ -466,32 +478,69 @@ class SFTPManager {
     }
 
     async clearProcessedFiles() {
-        this.processedFiles.clear();
-        await this.saveProcessedFiles();
+        await configManager.clearProcessedFiles();
         console.log('Cleared processed files list');
     }
 
     getProcessedFiles() {
-        return Array.from(this.processedFiles);
+        return configManager.getProcessedFilesArray();
     }
 
     /**
-     * DEBUG: Process local file instead of SFTP files
+     * Process local file instead of SFTP files
      */
     async processLocalFile() {
         try {
-            console.log(`🐛 DEBUG: Reading local file: ${this.DEBUG_LOCAL_FILE_PATH}`);
+            console.log(`🐛 CONFIG: Reading local file: ${configManager.localFilePath}`);
+            console.log(`🔒 ZERO-KB PROTECTION: Will check local file size`);
             
-            const fileContent = await fs.readFile(this.DEBUG_LOCAL_FILE_PATH, 'utf8');
-            const fileName = path.basename(this.DEBUG_LOCAL_FILE_PATH);
+            const fileContent = await fs.readFile(configManager.localFilePath, 'utf8');
+            const fileName = path.basename(configManager.localFilePath);
             
-            console.log(`🐛 DEBUG: Successfully read ${fileName} (${fileContent.length} chars)`);
+            // CRITICAL: Check file size even for local files
+            if (!fileContent || fileContent.length === 0) {
+                console.log(`🚫 ZERO-KB PROTECTION: Local file ${fileName} is 0kb - COMPLETELY IGNORED`);
+                return {
+                    processedCount: 0,
+                    errorCount: 0,
+                    totalFiles: 1,
+                    deletedCount: 0,
+                    deletionErrors: 0,
+                    skippedCount: 0,
+                    zeroKbSkippedCount: 1,
+                    newFiles: 0,
+                    debugDeleteFiles: configManager.fileDeletion,
+                    debugSkipProcessed: configManager.skipProcessedFiles,
+                    debugLocalFile: true,
+                    files: []
+                };
+            }
+
+            if (fileContent.length < 10) {
+                console.log(`⏭️ SKIP: Local file ${fileName} too small (${fileContent.length} chars)`);
+                return {
+                    processedCount: 0,
+                    errorCount: 0,
+                    totalFiles: 1,
+                    deletedCount: 0,
+                    deletionErrors: 0,
+                    skippedCount: 1,
+                    zeroKbSkippedCount: 0,
+                    newFiles: 0,
+                    debugDeleteFiles: configManager.fileDeletion,
+                    debugSkipProcessed: configManager.skipProcessedFiles,
+                    debugLocalFile: true,
+                    files: []
+                };
+            }
             
-            // Mark as processed
-            this.processedFiles.add(fileName);
-            await this.saveProcessedFiles();
+            console.log(`🐛 CONFIG: Successfully read ${fileName} (${fileContent.length} chars)`);
             
-            console.log(`🐛 DEBUG: Local file processing completed`);
+            // ❌ REMOVED: Do not mark as processed here - wait for processing confirmation
+            // configManager.addProcessedFile(fileName); // REMOVED THIS LINE
+            // await configManager.saveProcessedFiles(); // REMOVED THIS LINE
+            
+            console.log(`🐛 CONFIG: Local file ready for processing (NOT yet marked as processed)`);
             
             return {
                 processedCount: 1,
@@ -500,15 +549,16 @@ class SFTPManager {
                 deletedCount: 0,
                 deletionErrors: 0,
                 skippedCount: 0,
+                zeroKbSkippedCount: 0,
                 newFiles: 1,
-                debugDeleteFiles: this.DEBUG_DELETE_FILES,
-                debugSkipProcessed: this.DEBUG_SKIP_PROCESSED,
+                debugDeleteFiles: configManager.fileDeletion,
+                debugSkipProcessed: configManager.skipProcessedFiles,
                 debugLocalFile: true,
-                files: [{ fileName, content: fileContent }]
+                files: [{ fileName, content: fileContent, remoteFilePath: null }]
             };
             
         } catch (error) {
-            console.error(`🐛 DEBUG: Error reading local file ${this.DEBUG_LOCAL_FILE_PATH}:`, error.message);
+            console.error(`🐛 CONFIG: Error reading local file ${configManager.localFilePath}:`, error.message);
             throw new Error(`Failed to read local debug file: ${error.message}`);
         }
     }
