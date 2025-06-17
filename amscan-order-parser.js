@@ -181,7 +181,7 @@ class AmscanOrderProcessor {
                                 try {
 
                                     const existingOrder = await window.stoklyAPI.requester('GET', 
-                                        `https://api.stok.ly/v2/saleorders?filter=[customerReference]=={${orderHeader.orderId}}`,
+                                        `https://api.stok.ly/v2/saleorders?filter=[customerReference]=={${orderHeader.customerReferenceNumber}}`,
                                         order
                                     ).then(r=>{return r?.data?.[0]?.customerReference})
 
@@ -425,7 +425,7 @@ class AmscanOrderProcessor {
             stage: "order",
             sourceType: 'other',
             sourceReferenceId: orderHeader.orderId,
-            customerRefgerence: orderHeader.orderId,
+            customerReference: orderHeader.customerReferenceNumber,
             sourceId: '0e95de59-6f4c-4f69-9ec1-0d82e3b5f759',
             shipping: {
                 name: {
