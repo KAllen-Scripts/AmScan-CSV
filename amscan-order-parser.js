@@ -175,27 +175,45 @@ class AmscanOrderProcessor {
                                 // Create the order object
                                 const order = await this.createOrderObject(orderHeader, orderItems, customerResponse);
 
-                                console.log('✅ Order processed successfully:', order.sourceReferenceId);
-                                
-                                // Check if there were any missing SKUs
-                                const hasWarnings = order._metadata && order._metadata.missingSkus.length > 0;
-                                
-                                // Resolve with success data including warning information
-                                resolve({
-                                    success: true,
-                                    hasWarnings: hasWarnings,
-                                    orderData: {
-                                        orderId: order.sourceReferenceId,
-                                        itemCount: order.items.length,
-                                        totalItems: orderItems.length,
-                                        skippedItems: hasWarnings ? order._metadata.skippedItemsCount : 0,
-                                        missingSkus: hasWarnings ? order._metadata.missingSkus : [],
-                                        totalValue: orderItems.reduce((sum, item) => sum + item.lineValue, 0),
-                                        processedValue: order.items.reduce((sum, item) => sum + item.displayLineTotal, 0),
-                                        customerId: customerResponse || 'N/A',
-                                        warningMessage: hasWarnings ? `${order._metadata.skippedItemsCount} items skipped (missing SKUs)` : null
-                                    }
-                                });
+                                console.log('📋 ORDER: Order object created, submitting to API...');
+
+                                // Submit the order to the API
+                                try {
+                                    // const orderResponse = await window.stoklyAPI.requester('POST', 
+                                    //     `https://api.stok.ly/v2/saleorders`,
+                                    //     order
+                                    // );
+                                    
+                                    // console.log('✅ ORDER: Sale order submitted successfully to API');
+                                    // console.log('📋 ORDER: API Response:', orderResponse);
+                                    
+                                    // Check if there were any missing SKUs for warnings
+                                    const hasWarnings = order._metadata && order._metadata.missingSkus.length > 0;
+                                    
+                                    // Resolve with success data including warning information
+                                    resolve({
+                                        success: true,
+                                        hasWarnings: hasWarnings,
+                                        orderData: {
+                                            orderId: order.sourceReferenceId,
+                                            itemCount: order.items.length,
+                                            totalItems: orderItems.length,
+                                            skippedItems: hasWarnings ? order._metadata.skippedItemsCount : 0,
+                                            missingSkus: hasWarnings ? order._metadata.missingSkus : [],
+                                            totalValue: orderItems.reduce((sum, item) => sum + item.lineValue, 0),
+                                            processedValue: order.items.reduce((sum, item) => sum + item.displayLineTotal, 0),
+                                            customerId: customerResponse || 'N/A',
+                                            warningMessage: hasWarnings ? `${order._metadata.skippedItemsCount} items skipped (missing SKUs)` : null,
+                                            apiSubmitted: true // Flag to indicate successful API submission
+                                        }
+                                    });
+                                    
+                                } catch (orderSubmissionError) {
+                                    console.error('❌ ORDER: Failed to submit sale order to API:', orderSubmissionError);
+                                    
+                                    // Order creation succeeded but API submission failed
+                                    reject(new Error(`Order created but API submission failed: ${orderSubmissionError.message}`));
+                                }
                                 
                             } catch (processingError) {
                                 console.error('❌ Error processing order:', processingError);
