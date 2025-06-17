@@ -183,7 +183,9 @@ class AmscanOrderProcessor {
                                     const existingOrder = await window.stoklyAPI.requester('GET', 
                                         `https://api.stok.ly/v2/saleorders?filter=[customerReference]=={${orderHeader.customerReferenceNumber}}`,
                                         order
-                                    ).then(r=>{return r?.data?.[0]?.customerReference})
+                                    ).then(r=>{
+                                        return r?.data?.[0]
+                                    })
 
 
                                     if (!existingOrder){
