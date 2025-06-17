@@ -179,13 +179,19 @@ class AmscanOrderProcessor {
 
                                 // Submit the order to the API
                                 try {
-                                    // const orderResponse = await window.stoklyAPI.requester('POST', 
-                                    //     `https://api.stok.ly/v2/saleorders`,
-                                    //     order
-                                    // );
-                                    
-                                    // console.log('✅ ORDER: Sale order submitted successfully to API');
-                                    // console.log('📋 ORDER: API Response:', orderResponse);
+
+                                    const existingOrder = await window.stoklyAPI.requester('GET', 
+                                        `https://api.stok.ly/v2/saleorders?filter=[customerReference]=={${orderHeader.orderId}}`,
+                                        order
+                                    ).then(r=>{return r?.data?.[0]?.customerReference})
+
+
+                                    if (!existingOrder){
+                                        await window.stoklyAPI.requester('POST', 
+                                            `https://api.stok.ly/v2/saleorders`,
+                                            order
+                                        );
+                                    }
                                     
                                     // Check if there were any missing SKUs for warnings
                                     const hasWarnings = order._metadata && order._metadata.missingSkus.length > 0;
@@ -419,6 +425,7 @@ class AmscanOrderProcessor {
             stage: "order",
             sourceType: 'other',
             sourceReferenceId: orderHeader.orderId,
+            customerRefgerence: orderHeader.orderId,
             sourceId: '0e95de59-6f4c-4f69-9ec1-0d82e3b5f759',
             shipping: {
                 name: {
