@@ -28,6 +28,33 @@ class AmscanOrderProcessor {
         console.log(`🔒 ZERO-KB PROTECTION ACTIVE: Files with 0 bytes will be completely ignored`);
         console.log(`🔒 Size check: ${fileName} = ${fileContent ? fileContent.length : 'NO CONTENT'} bytes`);
         
+        // Check if required global variable is set
+        if (!window.selectedDynamicValue) {
+            console.log(`❌ Cannot process ${fileName}: No option selected from dropdown`);
+            this.updateProcessingStatus(`❌ Cannot process ${fileName} - Please select an option first`);
+            
+            // Notify about missing selection
+            if (window.processingResults) {
+                window.processingResults.addResult(fileName, {
+                    success: false,
+                    skipped: true,
+                    error: 'No option selected - please use the dropdown to select an option first'
+                });
+            }
+
+            // Notify the main process of failed processing
+            if (window.electronAPI && window.electronAPI.notifyProcessingComplete) {
+                await window.electronAPI.notifyProcessingComplete(fileName, {
+                    success: false,
+                    error: 'No option selected from dropdown'
+                });
+            }
+            
+            return;
+        }
+        
+        console.log(`✅ Processing ${fileName} with selected option: ${window.selectedDynamicValue}`);
+        
         // Update processing status in UI
         this.updateProcessingStatus(`Processing ${fileName}...`);
         
@@ -212,7 +239,8 @@ class AmscanOrderProcessor {
                                             processedValue: order.items.reduce((sum, item) => sum + item.displayLineTotal, 0),
                                             customerId: customerResponse || 'N/A',
                                             warningMessage: hasWarnings ? `${order._metadata.skippedItemsCount} items skipped (missing SKUs)` : null,
-                                            apiSubmitted: true // Flag to indicate successful API submission
+                                            apiSubmitted: true, // Flag to indicate successful API submission
+                                            selectedOption: window.selectedDynamicValue // Include the selected option
                                         }
                                     });
                                     
@@ -428,7 +456,7 @@ class AmscanOrderProcessor {
             sourceType: 'other',
             sourceReferenceId: orderHeader.orderId,
             customerReference: orderHeader.customerReferenceNumber,
-            sourceId: '0e95de59-6f4c-4f69-9ec1-0d82e3b5f759',
+            sourceId: window.selectedDynamicValue, // Use the selected dropdown value
             shipping: {
                 name: {
                     forename: orderHeader.deliveryName,
