@@ -216,10 +216,11 @@ class AmscanOrderProcessor {
 
 
                                     if (!existingOrder){
-                                        await window.stoklyAPI.requester('POST', 
-                                            `https://api.stok.ly/v2/saleorders`,
-                                            order
-                                        );
+                                        console.log(111111111111111)
+                                        // await window.stoklyAPI.requester('POST', 
+                                        //     `https://api.stok.ly/v2/saleorders`,
+                                        //     order
+                                        // );
                                     }
                                     
                                     // Check if there were any missing SKUs for warnings

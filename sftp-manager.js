@@ -1,4 +1,4 @@
-// FIXED: SFTP Manager - Only add to processed files on complete success
+// ENHANCED: SFTP Manager with Date Filtering - Only process files after 19/06/2025 5PM
 // Uses unified configuration and storage
 
 const SftpClient = require('ssh2-sftp-client');
@@ -15,7 +15,12 @@ class SFTPManager {
         this.currentConfig = null;
         this.connectionTimeout = null;
         
+        // CUTOFF DATE: 19/06/2025 at 5PM (17:00) - Customer goes live today
+        this.cutoffDate = new Date('2025-06-19T17:00:00.000Z'); // UTC time
+        
         console.log('🔗 SFTP: Initialized with unified configuration');
+        console.log(`📅 DATE FILTER: Only processing files created AFTER ${this.cutoffDate.toISOString()}`);
+        console.log(`📅 DATE FILTER: Cutoff = 19/06/2025 5PM UTC (Customer go-live date)`);
         
         // Ensure cleanup on process exit
         process.on('exit', () => this.forceCleanup());
@@ -181,6 +186,35 @@ class SFTPManager {
         console.log('🔗 DISCONNECT: Connection cleanup complete');
     }
 
+    /**
+     * Check if a file should be processed based on its modification time
+     * @param {object} fileItem - File item from SFTP list with modifyTime
+     * @param {string} fileName - Name of the file for logging
+     * @returns {boolean} - True if file should be processed
+     */
+    isFileAfterCutoff(fileItem, fileName) {
+        try {
+            // Get the file's modification time
+            const fileModTime = new Date(fileItem.modifyTime);
+            
+            // Check if file was modified after cutoff
+            const isAfterCutoff = fileModTime > this.cutoffDate;
+            
+            if (isAfterCutoff) {
+                console.log(`📅 DATE CHECK: ${fileName} - ACCEPT (${fileModTime.toISOString()} > ${this.cutoffDate.toISOString()})`);
+            } else {
+                console.log(`📅 DATE CHECK: ${fileName} - REJECT (${fileModTime.toISOString()} <= ${this.cutoffDate.toISOString()})`);
+            }
+            
+            return isAfterCutoff;
+        } catch (error) {
+            console.error(`📅 DATE CHECK: Error checking ${fileName}:`, error.message);
+            // If we can't determine the date, err on the side of caution and reject
+            console.log(`📅 DATE CHECK: ${fileName} - REJECT (unable to determine date)`);
+            return false;
+        }
+    }
+
     async getRemoteFiles(remotePath) {
         if (!this.isConnected || !this.sftp) {
             throw new Error('Not connected to SFTP server');
@@ -189,8 +223,13 @@ class SFTPManager {
         try {
             console.log(`📂 LIST: Listing files in: ${remotePath}`);
             console.log(`🔒 ZERO-KB PROTECTION: Files with 0 bytes will be completely ignored`);
+            console.log(`📅 DATE FILTER: Only files after ${this.cutoffDate.toISOString()} will be processed`);
             
             const fileList = await this.sftp.list(remotePath);
+            
+            let dateFilteredCount = 0;
+            let zeroKbCount = 0;
+            let smallFileCount = 0;
             
             const files = fileList
                 .filter(item => {
@@ -202,24 +241,35 @@ class SFTPManager {
                     
                     // CRITICAL: Skip 0kb files - ABSOLUTELY NOTHING happens to them
                     if (item.size === 0) {
+                        zeroKbCount++;
                         console.log(`🚫 ZERO-KB PROTECTION: ${item.name} (0kb file - COMPLETELY IGNORED)`);
                         return false;
                     }
                     
                     // EXTRA PROTECTION: Also skip very small files that might be corrupt
                     if (item.size < 10) {
+                        smallFileCount++;
                         console.log(`⏭️ SKIP: ${item.name} (too small - ${item.size} bytes)`);
                         return false;
                     }
                     
-                    console.log(`✅ INCLUDE: ${item.name} (${item.size} bytes)`);
+                    // NEW: Date filtering - only process files after cutoff date
+                    if (!this.isFileAfterCutoff(item, item.name)) {
+                        dateFilteredCount++;
+                        return false;
+                    }
+                    
+                    console.log(`✅ INCLUDE: ${item.name} (${item.size} bytes, modified: ${new Date(item.modifyTime).toISOString()})`);
                     return true;
                 })
                 .map(item => item.name);
             
-            console.log(`✅ LIST: Found ${files.length} valid files (0kb files completely ignored)`);
+            console.log(`✅ LIST: Found ${files.length} valid files for processing`);
+            console.log(`📊 FILTERED: ${dateFilteredCount} files before cutoff date, ${zeroKbCount} zero-kb files, ${smallFileCount} small files`);
+            console.log(`📅 CUTOFF: Files before ${this.cutoffDate.toISOString()} are ignored (customer manual entry period)`);
+            
             if (files.length > 0) {
-                console.log(`📂 LIST: Files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
+                console.log(`📂 LIST: Files to process: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
             }
             return files;
             
@@ -304,6 +354,8 @@ class SFTPManager {
             console.log(`🔒 ZERO-KB PROTECTION: All 0kb files will be completely ignored`);
             console.log(`🛡️ SAFE DELETION: Files only deleted after complete processing success`);
             console.log(`✅ FIXED: Files only added to processed list after complete success`);
+            console.log(`📅 DATE FILTER: Only processing files created after ${this.cutoffDate.toISOString()}`);
+            console.log(`📅 CUSTOMER: Go-live date is 19/06/2025 5PM - everything before is manual entry`);
             
             // Check if we should use local file instead of SFTP
             if (configManager.useLocalFile) {
@@ -361,7 +413,8 @@ class SFTPManager {
             
             const summary = `✅ SYNC: Completed - ${processedCount} downloaded, ${errorCount} errors, ${zeroKbSkippedCount} 0kb files protected`;
             const details = `${skippedCount} skipped [Delete=${configManager.fileDeletion ? 'ON' : 'OFF'}, Skip=${configManager.skipProcessedFiles ? 'ON' : 'OFF'}] - Files held for processing confirmation`;
-            console.log(`${summary}, ${details}`);
+            const dateInfo = `📅 Date filter: Only files after ${this.cutoffDate.toISOString()}`;
+            console.log(`${summary}, ${details}, ${dateInfo}`);
             
             return { 
                 processedCount, 
@@ -374,6 +427,7 @@ class SFTPManager {
                 newFiles: filesToProcess.length,
                 debugDeleteFiles: configManager.fileDeletion,
                 debugSkipProcessed: configManager.skipProcessedFiles,
+                cutoffDate: this.cutoffDate.toISOString(),
                 files: downloadedFiles
             };
 
@@ -398,6 +452,7 @@ class SFTPManager {
         console.log(`🔒 ZERO-KB PROTECTION: All 0kb files will be completely ignored`);
         console.log(`🛡️ SAFE DELETION: Files only deleted after complete processing success`);
         console.log(`✅ FIXED: Files only added to processed list after complete success`);
+        console.log(`📅 DATE FILTER: Only processing files created after ${this.cutoffDate.toISOString()}`);
         this.isRunning = true;
 
         // Initial sync
@@ -428,7 +483,8 @@ class SFTPManager {
                         deletionErrors: result.deletionErrors,
                         zeroKbSkippedCount: result.zeroKbSkippedCount,
                         debugDeleteFiles: result.debugDeleteFiles,
-                        debugSkipProcessed: result.debugSkipProcessed
+                        debugSkipProcessed: result.debugSkipProcessed,
+                        cutoffDate: result.cutoffDate
                     });
                 }
             } catch (error) {
@@ -468,6 +524,7 @@ class SFTPManager {
             isRunning: this.isRunning,
             isConnected: this.isConnected,
             processedFilesCount: configManager.getProcessedFilesCount(),
+            cutoffDate: this.cutoffDate.toISOString(),
             currentConfig: this.currentConfig ? {
                 host: this.currentConfig.host,
                 port: this.currentConfig.port,
@@ -493,6 +550,7 @@ class SFTPManager {
         try {
             console.log(`🐛 CONFIG: Reading local file: ${configManager.localFilePath}`);
             console.log(`🔒 ZERO-KB PROTECTION: Will check local file size`);
+            console.log(`📅 DATE FILTER: Local file always processed regardless of date (debug mode)`);
             
             const fileContent = await fs.readFile(configManager.localFilePath, 'utf8');
             const fileName = path.basename(configManager.localFilePath);
@@ -512,6 +570,7 @@ class SFTPManager {
                     debugDeleteFiles: configManager.fileDeletion,
                     debugSkipProcessed: configManager.skipProcessedFiles,
                     debugLocalFile: true,
+                    cutoffDate: this.cutoffDate.toISOString(),
                     files: []
                 };
             }
@@ -530,11 +589,13 @@ class SFTPManager {
                     debugDeleteFiles: configManager.fileDeletion,
                     debugSkipProcessed: configManager.skipProcessedFiles,
                     debugLocalFile: true,
+                    cutoffDate: this.cutoffDate.toISOString(),
                     files: []
                 };
             }
             
             console.log(`🐛 CONFIG: Successfully read ${fileName} (${fileContent.length} chars)`);
+            console.log(`📅 DEBUG: Local file processed without date restriction`);
             
             // ❌ REMOVED: Do not mark as processed here - wait for processing confirmation
             // configManager.addProcessedFile(fileName); // REMOVED THIS LINE
@@ -554,6 +615,7 @@ class SFTPManager {
                 debugDeleteFiles: configManager.fileDeletion,
                 debugSkipProcessed: configManager.skipProcessedFiles,
                 debugLocalFile: true,
+                cutoffDate: this.cutoffDate.toISOString(),
                 files: [{ fileName, content: fileContent, remoteFilePath: null }]
             };
             
