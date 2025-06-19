@@ -208,7 +208,7 @@ class AmscanOrderProcessor {
                                 try {
 
                                     const existingOrder = await window.stoklyAPI.requester('GET', 
-                                        `https://api.stok.ly/v2/saleorders?filter=[customerReference]=={${orderHeader.customerReferenceNumber}}`,
+                                        `https://api.stok.ly/v2/saleorders?filter=[sourceReferenceId]=={${orderHeader.orderId}}`,
                                         order
                                     ).then(r=>{
                                         return r?.data?.[0]
@@ -216,11 +216,10 @@ class AmscanOrderProcessor {
 
 
                                     if (!existingOrder){
-                                        console.log(111111111111111)
-                                        // await window.stoklyAPI.requester('POST', 
-                                        //     `https://api.stok.ly/v2/saleorders`,
-                                        //     order
-                                        // );
+                                        await window.stoklyAPI.requester('POST', 
+                                            `https://api.stok.ly/v2/saleorders`,
+                                            order
+                                        );
                                     }
                                     
                                     // Check if there were any missing SKUs for warnings
