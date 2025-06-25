@@ -97,6 +97,7 @@ class AmscanOrderProcessor {
                 const processingResult = await new Promise((resolve, reject) => {
                     try {
                         this.parseAmscanOrderFile(fileContent, async (orderHeader, orderItems) => {
+                            if(orderHeader.orderId == 'WS0000200383'){console.log(orderItems)}
                             try {
                                 // Initialize API if needed
                                 await this.ensureApiInitialized();
@@ -216,10 +217,10 @@ class AmscanOrderProcessor {
 
 
                                     if (!existingOrder){
-                                        await window.stoklyAPI.requester('POST', 
-                                            `https://api.stok.ly/v2/saleorders`,
-                                            order
-                                        );
+                                        // await window.stoklyAPI.requester('POST', 
+                                        //     `https://api.stok.ly/v2/saleorders`,
+                                        //     order
+                                        // );
                                     }
                                     
                                     // Check if there were any missing SKUs for warnings
